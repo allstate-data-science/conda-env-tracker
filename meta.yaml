@@ -1,0 +1,43 @@
+package:
+  name: conda-env-tracker
+  version: {{ GIT_DESCRIBE_TAG }}
+
+source:
+  path: ./
+
+build:
+  script: python -m pip install --no-deps --ignore-installed .
+  entry_points:
+    - cet = conda_env_tracker.cmdline:cli
+
+requirements:
+  build:
+    - python {{ python }}
+    - setuptools
+    - setuptools_scm
+
+  run:
+    - python
+    - click
+    - colorama
+    - oyaml>=0.9
+    - pyyaml>=5.0
+    - invoke
+
+
+test:
+  files:
+    - conda_env_tracker
+    - .pylintrc
+    - test
+  requires:
+    - pylint
+    - pytest
+    - pytest-cov
+    - pytest-mock
+    - pytest-pylint
+    - hypothesis
+
+about:
+  home: github.com/allstate-data-science/conda-env-tracker
+  license: BSD-3

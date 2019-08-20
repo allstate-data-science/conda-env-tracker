@@ -1,5 +1,5 @@
-FILE_NAME="habitat-auto.sh"
-FILE="$HOME/.habitat/$FILE_NAME"
+FILE_NAME="cet-auto.sh"
+FILE="$HOME/.cet/$FILE_NAME"
 PYTHON_LIB_PATH="$PREFIX/lib/python3."
 if [ -L "$FILE" ] ; then
     if [ ! -e "$FILE" ] ; then
@@ -9,6 +9,6 @@ if [ -L "$FILE" ] ; then
             fi
             PYTHON_MINOR_VERSION=$((PYTHON_MINOR_VERSION+1))
         done
-        ln -fs "$PYTHON_LIB_PATH$PYTHON_MINOR_VERSION/site-packages/habitat/shell/$FILE_NAME" "$FILE"
+        ln -fs "$PYTHON_LIB_PATH$PYTHON_MINOR_VERSION/site-packages/cet/shell/$FILE_NAME" "$FILE"
     fi
 fi

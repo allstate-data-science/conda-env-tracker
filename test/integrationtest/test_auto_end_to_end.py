@@ -116,9 +116,9 @@ def setup_env(request):
     unseen_history_file = unseen_remote / "history.yaml"
     unseen_history_file.write_text(content.replace(CET_ENV_NAME, UNSEEN_ENV_NAME))
 
-    local_conda_env = env_dir / "conda-env.yaml"
+    local_conda_env = env_dir / "environment.yml"
     conda_env_content = local_conda_env.read_text()
-    unseen_conda_env = unseen_remote / "conda-env.yaml"
+    unseen_conda_env = unseen_remote / "environment.yml"
     unseen_conda_env.write_text(
         conda_env_content.replace(CET_ENV_NAME, UNSEEN_ENV_NAME)
     )

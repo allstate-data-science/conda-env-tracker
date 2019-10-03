@@ -4,8 +4,9 @@ import shutil
 
 import pytest
 
+from conda_env_tracker.channels import Channels
 from conda_env_tracker.gateways.io import USER_ENVS_DIR
-from conda_env_tracker.history import History, HistoryPackages, Logs, Channels, Debug
+from conda_env_tracker.history import Debug, Diff, History, Logs, PackageRevision
 from conda_env_tracker.env import Environment
 from conda_env_tracker.errors import CondaEnvTrackerPushError, PUSH_ERROR_STR
 from conda_env_tracker.packages import Package, Packages
@@ -23,13 +24,13 @@ from conda_env_tracker.push import push
                 "conda install --name test-push-success pytest",
             ],
             "local_actions": [
-                "conda create --name test-push-success pandas=0.23=py36",
-                "conda install --name test-push-success pytest=0.11=py36",
+                "conda create --name test-push-success pandas=0.23.0=py36",
+                "conda install --name test-push-success pytest=4.0.0=py36",
             ],
             "remote_packages": Packages.from_specs(["pandas", "pylint"]),
             "remote_logs": ["conda create --name test-push-success pandas"],
             "remote_actions": [
-                "conda create --name test-push-success pandas=0.23=py36"
+                "conda create --name test-push-success pandas=0.23.0=py36"
             ],
         },
         {
@@ -41,8 +42,8 @@ from conda_env_tracker.push import push
                 "conda install --name test-push-fail pytest",
             ],
             "local_actions": [
-                "conda create --name test-push-fail pandas=0.23=py36",
-                "conda install --name test-push-fail pytest=0.11=py36",
+                "conda create --name test-push-fail pandas=0.23.0=py36",
+                "conda install --name test-push-fail pytest=4.0.0=py36",
             ],
             "remote_packages": Packages.from_specs(["pandas", "xgboost"]),
             "remote_logs": [
@@ -50,7 +51,7 @@ from conda_env_tracker.push import push
                 "conda install --name test-push-fail xgboost",
             ],
             "remote_actions": [
-                "conda create --name test-push-fail pandas=0.23=py36",
+                "conda create --name test-push-fail pandas=0.23.0=py36",
                 "conda install --name test-push-fail xgboost=0.7=py36",
             ],
         },
@@ -64,9 +65,9 @@ from conda_env_tracker.push import push
                 "conda install --name test-push-fail pytest",
             ],
             "local_actions": [
-                "conda create --name test-push-fail pandas=0.23=py36",
+                "conda create --name test-push-fail pandas=0.23.0=py36",
                 "conda install --name test-push-fail numpy=1.1.15=py36",
-                "conda install --name test-push-fail pytest=0.11=py36",
+                "conda install --name test-push-fail pytest=4.0.0=py36",
             ],
             "remote_packages": Packages.from_specs(["pandas", "numpy", "pytest"]),
             "remote_logs": [
@@ -75,8 +76,8 @@ from conda_env_tracker.push import push
                 "conda install --name test-push-fail numpy",
             ],
             "remote_actions": [
-                "conda create --name test-push-fail pandas=0.23=py36",
-                "conda install --name test-push-fail pytest=0.11=py36",
+                "conda create --name test-push-fail pandas=0.23.0=py36",
+                "conda install --name test-push-fail pytest=4.0.0=py36",
                 "conda install --name test-push-fail numpy=1.1.15=py36",
             ],
         },
@@ -93,13 +94,22 @@ def setup(mocker, request):
     remote_logs = request.param["remote_logs"]
     remote_actions = request.param["remote_actions"]
 
-    mocker.patch("conda_env_tracker.env.get_dependencies")
-    history = History(
+    dependencies = {
+        "conda": {
+            "pandas": Package("pandas", "pandas", version="0.23.0"),
+            "pytest": Package("pytest", "pytest", version="4.0.0"),
+        }
+    }
+    mocker.patch(
+        "conda_env_tracker.env.get_dependencies", mocker.Mock(return_value=dependencies)
+    )
+    history = History.create(
         name=env_name,
-        packages=HistoryPackages.create(local_packages),
+        packages=PackageRevision.create(local_packages, dependencies=dependencies),
         channels=Channels(["conda-forge"]),
         logs=Logs([log for log in local_logs]),
         actions=local_actions,
+        diff=Diff(),
         debug=Debug(),
     )
     env = Environment(name=env_name, history=history)
@@ -110,12 +120,13 @@ def setup(mocker, request):
         return_value="~/path/to/remote",
     )
     mocker.patch("pathlib.Path.is_dir", return_value=True)
-    history = History(
+    history = History.create(
         name=env_name,
         channels=Channels(["conda-forge"]),
-        packages=HistoryPackages.create(remote_packages),
+        packages=PackageRevision.create(remote_packages, dependencies=dependencies),
         logs=Logs([log for log in remote_logs]),
         actions=remote_actions,
+        diff=Diff(),
         debug=Debug(),
     )
     mocker.patch(
@@ -141,8 +152,8 @@ def test_push(setup):
         push(env=env)
         assert env.history.packages == {
             "conda": {
-                "pandas": Package.from_spec("pandas"),
-                "pytest": Package.from_spec("pytest"),
+                "pandas": Package("pandas", "pandas", "0.23.0"),
+                "pytest": Package("pytest", "pytest", "4.0.0"),
             }
         }
         assert env.history.logs == [
@@ -150,6 +161,6 @@ def test_push(setup):
             f"conda install --name {env.name} pytest",
         ]
         assert env.history.actions == [
-            f"conda create --name {env.name} pandas=0.23=py36",
-            f"conda install --name {env.name} pytest=0.11=py36",
+            f"conda create --name {env.name} pandas=0.23.0=py36",
+            f"conda install --name {env.name} pytest=4.0.0=py36",
         ]

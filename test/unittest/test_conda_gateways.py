@@ -118,7 +118,7 @@ def setup_env_dir(request, mocker):
     env_dir = Path(__file__).parent / "env_dir"
     if not env_dir.exists():
         env_dir.mkdir()
-    (env_dir / "conda-env.yaml").touch()
+    (env_dir / "environment.yml").touch()
 
     run_mock = mocker.patch("conda_env_tracker.gateways.conda.run_command")
     attrs = {"return_value.return_code": 0, "return_value.stdout": ""}
@@ -128,7 +128,11 @@ def setup_env_dir(request, mocker):
         shutil.rmtree(env_dir)
 
     request.addfinalizer(teardown)
-    return {"env_dir": env_dir, "run_mock": run_mock, "expected_file": "conda-env.yaml"}
+    return {
+        "env_dir": env_dir,
+        "run_mock": run_mock,
+        "expected_file": "environment.yml",
+    }
 
 
 def test_update_env_from_file(setup_env_dir):

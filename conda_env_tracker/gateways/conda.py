@@ -135,11 +135,18 @@ def get_conda_channels() -> ListLike:
 
 def delete_conda_environment(name: str) -> None:
     """Delete conda environment"""
+    commands = []
     if os.environ["CONDA_DEFAULT_ENV"] == name:
-        raise CondaEnvTrackerCondaError(
-            f'Must run "conda deactivate" before removing or rebuilding the {name} environment.'
+        conda_bin_path = get_conda_bin_path()
+        conda_functions_script = (
+            conda_bin_path.parent / "etc" / "profile.d" / "conda.sh"
         )
-    subprocess.run(f"conda env remove -y --name {name}", shell=True)
+        commands.append(f"source {conda_functions_script}")
+        commands.append("conda deactivate")
+    commands.append(f"conda env remove -y --name {name}")
+    command = " && ".join(commands)
+    logger.debug(f"Conda remove command:\n{command}")
+    subprocess.run(command, shell=True)
 
 
 def conda_create(
@@ -249,7 +256,7 @@ def get_conda_remove_command(name: str, packages: Packages, yes: bool = False) -
 
 def _join_packages(packages: Packages) -> str:
     """Join a list of package specs."""
-    return " ".join(package.spec for package in packages)
+    return " ".join(_quote_spec_if_necessary(package.spec) for package in packages)
 
 
 def update_conda_environment(env_dir: PathLike) -> None:
@@ -267,7 +274,7 @@ def update_conda_environment(env_dir: PathLike) -> None:
 def _get_env_file(env_dir: Path) -> Path:
     """Get the environment file. This file only contains packages the 
     user has specifically asked for and does not contain dependencies."""
-    env_file = env_dir / "conda-env.yaml"
+    env_file = env_dir / "environment.yml"
     if env_file.exists():
         return env_file
     raise CondaEnvTrackerCondaError(
@@ -298,3 +305,11 @@ def get_conda_activate_command(name):
     conda_bin_path = get_conda_bin_path()
     conda_functions_script = conda_bin_path.parent / "etc" / "profile.d" / "conda.sh"
     return f"source {conda_functions_script} && conda activate {name}"
+
+
+def _quote_spec_if_necessary(spec: str):
+    """If a spec needs to be quoted, then add quotes around it."""
+    special_bash_chars = ("<", ">", "|", ",")
+    if any(char in spec for char in special_bash_chars):
+        return f'"{spec}"'
+    return spec

@@ -10,10 +10,10 @@ import pytest
 
 from conda_env_tracker.cmdline import cli
 
-settings(deadline=None)
 TEXT = st.text(string.ascii_letters + string.digits, min_size=1)
 
 
+@settings(deadline=None)
 @given(
     name=TEXT,
     specs=st.one_of(st.tuples(), st.tuples(TEXT), st.tuples(TEXT, TEXT)),
@@ -120,18 +120,12 @@ def test_pip_install(mocker, command, expected):
     "command, expected",
     [
         (
-            "remote --name explicit_name /nas/isg_prodops_work/connectedcar/riskmap".split(),
-            {
-                "name": "explicit_name",
-                "remote_dir": "/nas/isg_prodops_work/connectedcar/riskmap",
-            },
+            "remote --name explicit_name /dir1/dir2/dir3/dir4".split(),
+            {"name": "explicit_name", "remote_dir": "/dir1/dir2/dir3/dir4"},
         ),
         (
-            "remote /nas/isg_prodops_work/connectedcar/riskmap".split(),
-            {
-                "name": "inferred_name",
-                "remote_dir": "/nas/isg_prodops_work/connectedcar/riskmap",
-            },
+            "remote /dir1/dir2/dir3/dir4".split(),
+            {"name": "inferred_name", "remote_dir": "/dir1/dir2/dir3/dir4"},
         ),
         ("remote".split(), {"name": "inferred_name", "remote_dir": None}),
     ],
@@ -333,3 +327,12 @@ def test_sync_name_passed(mocker):
     assert result.exit_code == 0
     name_mock.assert_not_called()
     sync_mock.assert_called_once_with(name=name, yes=False)
+
+
+def test_get_cet_version(mocker):
+    print_mock = mocker.patch("conda_env_tracker.cmdline.print")
+    mocker.patch("conda_env_tracker.cmdline.__version__", "1.0.0")
+    runner = CliRunner()
+    runner.invoke(cli, ["--version"])
+
+    print_mock.assert_called_once_with("cet 1.0.0")

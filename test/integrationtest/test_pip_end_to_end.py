@@ -19,9 +19,10 @@ from conda_env_tracker.packages import Packages
 @pytest.fixture(scope="module")
 def pip_setup(end_to_end_setup):
     """Doing pip install to setup for testing history and conda env yaml files."""
-    pip_install(
+    env = pip_install(
         name=end_to_end_setup["name"], specs=["pytest==4.0.0", "pytest-cov"], yes=True
     )
+    end_to_end_setup["env"] = env
     return end_to_end_setup
 
 
@@ -29,6 +30,7 @@ def pip_setup(end_to_end_setup):
 def test_history_pip_install(pip_setup):
     """Test the history.yaml in detail."""
     name = pip_setup["name"]
+    env = pip_setup["env"]
     env_dir = pip_setup["env_dir"]
     channels = pip_setup["channels"]
 
@@ -41,8 +43,8 @@ def test_history_pip_install(pip_setup):
     pip_action_exp = rf"(pip install pytest==4.0.0)(\s)(pytest-cov==)(.*)(--index-url {pip.PIP_DEFAULT_INDEX_URL})"
 
     expected_packages = {
-        "conda": {"colorama": "*", "python": "3.6"},
-        "pip": {"pytest": "4.0.0", "pytest-cov": "*"},
+        "conda": {"colorama": "*", "python": "python=3.6"},
+        "pip": {"pytest": "pytest==4.0.0", "pytest-cov": "*"},
     }
     expected_log = (
         f"pip install pytest==4.0.0 pytest-cov --index-url {pip.PIP_DEFAULT_INDEX_URL}"
@@ -58,46 +60,69 @@ def test_history_pip_install(pip_setup):
     assert actual["name"] == name
     assert actual["channels"] == channels
     assert actual["packages"] == expected_packages
-    assert actual["logs"][-1] == expected_log
-    assert len(actual["logs"]) == 2
-    assert re.match(pip_action_exp, actual["actions"][-1])
-    assert len(actual["actions"]) == 2
-    for i in range(len(actual["debug"])):
+    assert actual["revisions"][-1]["log"] == expected_log
+    assert len(actual["revisions"]) == 2
+    assert re.match(pip_action_exp, actual["revisions"][-1]["action"])
+    for i in range(len(actual["revisions"])):
         for key, val in expected_debug[i].items():
             if key == "timestamp":
-                assert actual["debug"][i][key].startswith(val)
+                assert actual["revisions"][i]["debug"][key].startswith(val)
             else:
-                assert actual["debug"][i][key] == val
+                assert actual["revisions"][i]["debug"][key] == val
 
-    expected_history = [f"name: {name}", "channels:"]
-    for channel in channels:
-        expected_history.append(f"  - {channel}")
-    expected_history_start = "\n".join(
-        expected_history
-        + [
+    # The packages section at the top of the file is current
+    expected_packages_section = "\n".join(
+        [
             "packages:",
             "  conda:",
-            "    python: '3.6'",
+            "    python: python=3.6",
             "    colorama: '*'",
             "  pip:",
-            "    pytest: 4.0.0",
+            "    pytest: pytest==4.0.0",
             "    pytest-cov: '*'",
-            "logs:",
-            "  - conda create --name end_to_end_test python=3.6 colorama --override-channels --strict-channel-priority",
-            "    --channel main",
-            f"  - {expected_log}",
-            "actions:",
-            f"  - conda create --name {name} python=3.6",
+            "revisions:",
         ]
     )
-    end = actual_history_content.rfind("python=3.6") + len("python=3.6")
-    actual_history_start = actual_history_content[:end]
-    assert actual_history_start == expected_history_start
+    assert expected_packages_section in actual_history_content
+
+    pip_dependencies = env.dependencies["pip"]
+
+    expected_second_revision = "\n".join(
+        [
+            "  - packages:",
+            "      conda:",
+            "        python: python=3.6",
+            "        colorama: '*'",
+            "      pip:",
+            "        pytest: pytest==4.0.0",
+            "        pytest-cov: '*'",
+            "    diff:",
+            "      pip:",
+            "        upsert:",
+            "        - pytest==4.0.0",
+            f"        - pytest-cov=={pip_dependencies['pytest-cov'].version}",
+            f"    log: pip install pytest==4.0.0 pytest-cov --index-url {pip.PIP_DEFAULT_INDEX_URL}",
+            f"    action: pip install pytest",
+        ]
+    )
+
+    index_first_revision = actual_history_content.find("  - packages:")
+    index_second_revision_start = actual_history_content.find(
+        "  - packages:", index_first_revision + 1
+    )
+    second_action = "action: pip install pytest"
+    index_second_action = actual_history_content.find(
+        second_action, index_second_revision_start
+    ) + len(second_action)
+    actual_second_revision = actual_history_content[
+        index_second_revision_start:index_second_action
+    ]
+    assert actual_second_revision == expected_second_revision
 
 
 @pytest.mark.run(order=-10)
 def test_conda_env_yaml_pip_install(pip_setup):
-    """Test the conda-env.yaml file in detail."""
+    """Test the environment.yml file in detail."""
     name = pip_setup["name"]
     env_dir = pip_setup["env_dir"]
     channels = pip_setup["channels"]
@@ -131,7 +156,7 @@ def test_conda_env_yaml_pip_install(pip_setup):
         + "\n"
     )
 
-    actual = (env_dir / "conda-env.yaml").read_text()
+    actual = (env_dir / "environment.yml").read_text()
     print(actual)
     assert actual == expected
 
@@ -142,20 +167,21 @@ def test_pip_remove(pip_setup):
     env_dir = pip_setup["env_dir"]
     channels = pip_setup["channels"]
 
-    history_file = env_dir / "history.yaml"
     pip_remove(name=name, specs=["pytest-cov"], yes=True)
+
+    history_file = env_dir / "history.yaml"
     actual_history_content = history_file.read_text()
     print(actual_history_content)
     expected_packages = {
-        "conda": {"colorama": "*", "python": "3.6"},
-        "pip": {"pytest": "4.0.0"},
+        "conda": {"colorama": "*", "python": "python=3.6"},
+        "pip": {"pytest": "pytest==4.0.0"},
     }
     actual = yaml.load(actual_history_content, Loader=yaml.FullLoader)
 
     expected_log = "pip uninstall pytest-cov"
     assert actual["packages"] == expected_packages
-    assert actual["logs"][-1] == expected_log
-    assert actual["actions"][-1] == expected_log
+    assert actual["revisions"][-1]["log"] == expected_log
+    assert actual["revisions"][-1]["action"] == expected_log
 
     packages = get_dependencies(name=name)
     conda_packages = packages["conda"]
@@ -183,9 +209,54 @@ def test_pip_remove(pip_setup):
         + "\n"
     )
 
-    actual = (env_dir / "conda-env.yaml").read_text()
+    actual = (env_dir / "environment.yml").read_text()
     print(actual)
     assert actual == expected
+
+    expected_packages_section = "\n".join(
+        [
+            "packages:",
+            "  conda:",
+            "    python: python=3.6",
+            "    colorama: '*'",
+            "  pip:",
+            "    pytest: pytest==4.0.0",
+            "revisions:",
+        ]
+    )
+    assert expected_packages_section in actual_history_content
+
+    expected_third_revision = "\n".join(
+        [
+            "  - packages:",
+            "      conda:",
+            "        python: python=3.6",
+            "        colorama: '*'",
+            "      pip:",
+            "        pytest: pytest==4.0.0",
+            "    diff:",
+            "      pip:",
+            "        remove:",
+            "        - pytest-cov",
+            f"    log: pip uninstall pytest-cov",
+            f"    action: pip uninstall pytest-cov",
+        ]
+    )
+    index_first_revision = actual_history_content.find("  - packages:")
+    index_second_revision = actual_history_content.find(
+        "  - packages:", index_first_revision + 1
+    )
+    index_third_revision = actual_history_content.find(
+        "  - packages:", index_second_revision + 1
+    )
+    third_action = f"    action: {expected_log}"
+    index_third_action = actual_history_content.find(
+        third_action, index_third_revision
+    ) + len(third_action)
+    actual_third_revision = actual_history_content[
+        index_third_revision:index_third_action
+    ]
+    assert actual_third_revision == expected_third_revision
 
 
 def test_env_name_error():

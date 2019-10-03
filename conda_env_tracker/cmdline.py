@@ -1,16 +1,29 @@
 """The command line interface to conda_env_tracker."""
 # pylint: disable=function-redefined,invalid-name
+import logging
 
 import click
 from colorama import Fore, Style
 
-from conda_env_tracker import main
+from conda_env_tracker import main, __version__
 from conda_env_tracker.errors import CommandLineError
 
+logger = logging.getLogger(__name__)
 
-@click.group()
-def cli():
-    """The command line interface for conda-env-tracker."""
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+@click.option(
+    "--version",
+    is_flag=True,
+    default=False,
+    help="Get the current conda env tracker version.",
+)
+def cli(ctx, version: bool = False):
+    """The command line interface for conda env tracker."""
+    if version:
+        print(f"cet {__version__}")
+    return ctx.invoked_subcommand
 
 
 @cli.command()
@@ -33,7 +46,8 @@ def init(auto_arg, yes):
     """Install the cet command line tool for all conda environments."""
     main.init(yes=yes)
     if auto_arg:
-        main.setup_auto(yes=yes)
+        main.setup_auto_shell_file()
+        main.setup_auto_bash_config(yes=yes)
 
 
 @cli.command()
@@ -57,9 +71,17 @@ def init(auto_arg, yes):
     default=False,
     help="Answer yes to any questions. Required for non-interactive jobs.",
 )
-def auto(activate, sync_arg, yes):
-    """Setup cet to automatically run push/pull in cet directories."""
-    main.setup_auto(activate=activate, sync=sync_arg, yes=yes)
+@click.option(
+    "--ignore-bash-config",
+    is_flag=True,
+    default=False,
+    help="Updates the shell file but makes no changes to the bash config file.",
+)
+def auto(activate, sync_arg, yes, ignore_bash_config):
+    """Setup conda env tracker to automatically run push/pull in conda env tracker directories."""
+    main.setup_auto_shell_file()
+    if not ignore_bash_config:
+        main.setup_auto_bash_config(activate=activate, sync=sync_arg, yes=yes)
 
 
 @cli.command()
@@ -118,47 +140,14 @@ def create(packages, name, channel, sync_arg, infer, yes, strict_channel_priorit
         )
     if sync_arg:
         main.setup_remote(name=name, yes=yes)
-        main.sync(name=name, yes=yes)
+        main.push(name=name)
 
 
 @cli.command()
-@click.argument("specs", nargs=-1)
-@click.option("--name", "-n", required=False, help="The name of the cet environment.")
-@click.option(
-    "--channel",
-    "-c",
-    multiple=True,
-    help="Conda channels. Appends to list of channels from creation.",
-)
-@click.option(
-    "--yes",
-    "-y",
-    is_flag=True,
-    default=False,
-    help="Answer yes to any questions. Required for non-interactive jobs.",
-)
-@click.option(
-    "--strict-channel-priority",
-    default=True,
-    type=bool,
-    help="Use strict channel priority (if True) or default channel priority (if False) with conda.",
-)
-def install(specs, name, channel, yes, strict_channel_priority):
-    """Conda install (or update) packages."""
-    name = _infer_name_if_necessary(name)
-    main.conda_install(
-        name=name,
-        specs=specs,
-        channels=channel,
-        yes=yes,
-        strict_channel_priority=strict_channel_priority,
-    )
-
-
-@cli.command()
-@click.option("--name", "-n", required=True, help="The name of the cet environment.")
+@click.option("--name", "-n", help="The name of the conda env tracker environment.")
 def rebuild(name):
-    """Rebuild a cet environment. Deletes and creates the conda environment."""
+    """Rebuild a conda env tracker environment. Deletes and creates the conda environment."""
+    name = _infer_name_if_necessary(name)
     main.rebuild(name=name)
 
 
@@ -171,7 +160,7 @@ def pkg_list(name):
 
 
 @cli.command()
-@click.option("--name", "-n", required=True, help="The name of the cet environment.")
+@click.option("--name", "-n", help="The name of the conda env tracker environment.")
 @click.option(
     "--yes",
     "-y",
@@ -180,7 +169,8 @@ def pkg_list(name):
     help="Answer yes to any questions. Required for non-interactive jobs.",
 )
 def remove(name, yes):
-    """Remove a cet environment. Both the conda environment and any local files."""
+    """Remove a conda env tracker environment. Both the conda environment and any local files."""
+    name = _infer_name_if_necessary(name)
     main.remove(name=name, yes=yes)
 
 
@@ -244,6 +234,40 @@ def sync(name, infer, yes):
     """Automatically pull and push environment changes (if necessary)."""
     name = _infer_name_if_necessary(name, infer=infer)
     main.sync(name=name, yes=yes)
+
+
+@cli.command()
+@click.argument("specs", nargs=-1)
+@click.option("--name", "-n", required=False, help="The name of the cet environment.")
+@click.option(
+    "--channel",
+    "-c",
+    multiple=True,
+    help="Conda channels. Appends to list of channels from creation.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Answer yes to any questions. Required for non-interactive jobs.",
+)
+@click.option(
+    "--strict-channel-priority",
+    default=True,
+    type=bool,
+    help="Use strict channel priority (if True) or default channel priority (if False) with conda.",
+)
+def install(specs, name, channel, yes, strict_channel_priority):
+    """Conda install (or update) packages."""
+    name = _infer_name_if_necessary(name)
+    main.conda_install(
+        name=name,
+        specs=specs,
+        channels=channel,
+        yes=yes,
+        strict_channel_priority=strict_channel_priority,
+    )
 
 
 @cli.group()

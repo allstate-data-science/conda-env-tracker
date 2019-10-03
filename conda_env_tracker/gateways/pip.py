@@ -88,9 +88,12 @@ def get_pip_custom_install_command(spec: str) -> str:
 def get_pip_version(name: str) -> Optional[str]:
     """Check for the version of pip (if installed)."""
     if is_current_conda_env(name):
-        import pip
+        try:
+            import pip
 
-        return pip.__version__
+            return pip.__version__
+        except ModuleNotFoundError:
+            pass
     dependencies = get_dependencies(name=name)
     return dependencies["conda"].get("pip", Package(name="pip")).version
 

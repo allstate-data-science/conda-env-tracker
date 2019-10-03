@@ -29,15 +29,65 @@ def test_create_fail_existing_env(mocker):
     get_env_mock = mocker.patch("conda_env_tracker.env.get_all_existing_environment")
     env_name = "test-name"
     get_env_mock.configure_mock(return_value=env_name)
+    mocker.patch("conda_env_tracker.env.prompt_yes_no").return_value = False
     with pytest.raises(Exception) as err:
         Environment.create(name=env_name, packages=["pandas"])
-    assert str(err.value) == f"Environment {env_name} already exist"
+    assert str(err.value) == f"Environment {env_name} already exists"
 
 
 def test_create_fail_base_env():
     with pytest.raises(Exception) as err:
         Environment.create(name="base", packages=["pandas"])
     assert str(err.value) == "Environment can not be created using default name base"
+
+
+def test_replace_existing_env_success(mocker):
+    mocker.patch("conda_env_tracker.env.delete_conda_environment")
+    mocker.patch("conda_env_tracker.env.prompt_yes_no").return_value = True
+    env_name = "conda_env_tracker-test-create-history"
+    create_cmd = f"conda create --name {env_name} pandas"
+    channels = ["conda-forge", "main"]
+    packages = Packages.from_specs("pandas")
+    action = "pandas=0.23=py_36"
+
+    mocker.patch("conda_env_tracker.env.get_all_existing_environment").return_value = [
+        env_name
+    ]
+    mocker.patch(
+        "conda_env_tracker.env.conda_create", mocker.Mock(return_value=create_cmd)
+    )
+    mocker.patch(
+        "conda_env_tracker.env.get_dependencies",
+        mocker.Mock(
+            return_value={
+                "conda": {"pandas": Package("pandas", "*", "0.23=py_36")},
+                "pip": {},
+            }
+        ),
+    )
+    mocker.patch(
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
+    )
+    mocker.patch(
+        "conda_env_tracker.env.get_conda_channels", mocker.Mock(return_value=channels)
+    )
+    Environment.create(name=env_name, packages=packages)
+
+    writer = EnvIO(env_directory=USER_ENVS_DIR / env_name)
+    history = writer.get_history()
+    channel_string = "--override-channels --strict-channel-priority " + " ".join(
+        "--channel " + channel for channel in channels
+    )
+    assert history.actions == [
+        f"conda create --name {env_name} {action} {channel_string}"
+    ]
+    assert history.packages == {"conda": {"pandas": Package.from_spec("pandas")}}
+    assert history.channels == channels
+    assert history.logs == [create_cmd]
+
+    env_dir = Path(USER_ENVS_DIR) / env_name
+    shutil.rmtree(env_dir)
 
 
 def test_create_history_success(mocker):
@@ -61,7 +111,8 @@ def test_create_history_success(mocker):
         ),
     )
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_conda_channels", mocker.Mock(return_value=channels)
@@ -115,28 +166,33 @@ def test_export(mocker):
         "conda_env_tracker.env.get_dependencies",
         mocker.Mock(
             return_value={
-                "conda": {
-                    "python": Package(
-                        "python", "python=3.7.2=buildstr", "3.7.2", "buildstr"
-                    )
-                },
+                "conda": {"python": Package("python", "python", "3.7.2", "buildstr")},
                 "pip": {},
             }
         ),
     )
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
 
     history = History.parse(
         {
             "name": name,
             "channels": ["conda-forge", "main"],
-            "packages": {"conda": {"python": "3.7.2=buildstr"}},
-            "logs": ["conda create --name test python=3.7"],
-            "actions": ["conda create --name test python=3.7.2=buildstr"],
-            "debug": [
-                {"platform": "osx", "conda_version": "4.6.1", "pip_version": "18.1"}
+            "packages": {"conda": {"python": "python=3.7"}},
+            "revisions": [
+                {
+                    "log": "conda create --name test python=3.7",
+                    "action": "conda create --name test python=3.7.2=buildstr",
+                    "packages": {"conda": {"python": "python=3.7"}},
+                    "diff": {"conda": {"upsert": ["python=3.7.2"]}},
+                    "debug": {
+                        "platform": "osx",
+                        "conda_version": "4.6.1",
+                        "pip_version": "18.1",
+                    },
+                }
             ],
         }
     )
@@ -151,13 +207,13 @@ channels:
 - main
 - nodefaults
 dependencies:
-- python=3.7.2=buildstr
+- python=3.7.2
 """
 
     assert io_mock.mock_calls == [
         mocker.call(env_directory=Path(USER_ENVS_DIR / name)),
         mocker.call().write_history_file(history=history),
-        mocker.call().export_packages(contents=expected.replace("=buildstr", "")),
+        mocker.call().export_packages(contents=expected),
         mocker.call().delete_install_r(),
     ]
 
@@ -167,18 +223,15 @@ def test_export_pip(mocker):
 
     io_mock = mocker.patch("conda_env_tracker.env.EnvIO")
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_dependencies",
         mocker.Mock(
             return_value={
-                "conda": {
-                    "python": Package(
-                        "python", "python=3.7.2=buildstr", "3.7.2", "buildstr"
-                    )
-                },
-                "pip": {"pytest": Package("pytest", "pytest==4.0.0", "4.0.0", None)},
+                "conda": {"python": Package("python", "python", "3.7.2", "buildstr")},
+                "pip": {"pytest": Package("pytest", "pytest", "4.0.0", None)},
             }
         ),
     )
@@ -187,14 +240,30 @@ def test_export_pip(mocker):
         {
             "name": name,
             "channels": ["conda-forge", "main"],
-            "packages": {"conda": {"python": "3.7.2=buildstr"}, "pip": {"pytest": "*"}},
-            "logs": ["conda create --name test python=3.7", "pip install pytest"],
-            "actions": [
-                "conda create --name test python=3.7.2=buildstr",
-                "pip install pytest==4.0.0",
-            ],
-            "debug": [
-                {"platform": "osx", "conda_version": "4.6.1", "pip_version": "18.1"}
+            "packages": {"conda": {"python": "3.7"}, "pip": {"pytest": "*"}},
+            "revisions": [
+                {
+                    "log": "conda create --name test python=3.7",
+                    "action": "conda create --name test python=3.7.2=buildstr",
+                    "packages": {"conda": {"python": "3.7"}},
+                    "diff": {"conda": {"upsert": ["python=3.7.2"]}},
+                    "debug": {
+                        "platform": "osx",
+                        "conda_version": "4.6.1",
+                        "pip_version": "18.1",
+                    },
+                },
+                {
+                    "log": "pip install pytest",
+                    "action": "pip install pytest==4.0.0",
+                    "packages": {"conda": {"python": "3.7"}, "pip": {"pytest": "*"}},
+                    "diff": {"pip": {"upsert": ["pytest==4.0.0"]}},
+                    "debug": {
+                        "platform": "osx",
+                        "conda_version": "4.6.1",
+                        "pip_version": "18.1",
+                    },
+                },
             ],
         }
     )
@@ -209,7 +278,7 @@ channels:
 - main
 - nodefaults
 dependencies:
-- python=3.7.2=buildstr
+- python=3.7.2
 - pip:
   - pytest==4.0.0
 """
@@ -217,7 +286,7 @@ dependencies:
     assert io_mock.mock_calls == [
         mocker.call(env_directory=Path(USER_ENVS_DIR / name)),
         mocker.call().write_history_file(history=history),
-        mocker.call().export_packages(contents=expected.replace("=buildstr", "")),
+        mocker.call().export_packages(contents=expected),
         mocker.call().delete_install_r(),
     ]
 
@@ -226,7 +295,8 @@ def test_infer_environment_success(mocker):
     env_name = "infer-test"
     dependencies = {"conda": {"pandas": Package("pandas", "pandas", "0.23", "py_36")}}
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_all_existing_environment", return_value=[env_name]
@@ -262,7 +332,8 @@ def test_infer_environment_with_spec_success(mocker):
     env_name = "infer-test"
     dependencies = {"conda": {"pandas": Package("pandas", "pandas", "0.23", "py_36")}}
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_all_existing_environment", return_value=[env_name]
@@ -297,7 +368,8 @@ def test_infer_environment_with_spec_success(mocker):
 def test_infer_environment_does_not_exist(mocker):
     env_name = "infer-test"
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_all_existing_environment",
@@ -318,7 +390,8 @@ def test_infer_environment_package_does_not_exist(mocker):
     env_name = "infer-test"
     dependencies = {"conda": {"pandas": Package("pandas", "pandas", "0.23", "py_36")}}
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_all_existing_environment", return_value=[env_name]
@@ -344,7 +417,8 @@ def test_infer_environment_with_pip_package_success(mocker):
         "pip": {"pytest": Package("pytest", "pytest", "0.11")},
     }
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch(
         "conda_env_tracker.env.get_all_existing_environment", return_value=[env_name]

@@ -4,16 +4,17 @@ import shutil
 
 import pytest
 
+from conda_env_tracker.channels import Channels
 from conda_env_tracker.env import Environment
 from conda_env_tracker.errors import CondaEnvTrackerPackageNameError
 from conda_env_tracker.gateways.io import USER_ENVS_DIR
 from conda_env_tracker.history import (
-    History,
-    HistoryPackages,
-    Logs,
     Actions,
-    Channels,
     Debug,
+    Diff,
+    History,
+    Logs,
+    PackageRevision,
 )
 from conda_env_tracker.main import (
     create,
@@ -33,19 +34,19 @@ from conda_env_tracker.packages import Package, Packages
     params=[
         {
             "packages": ["pandas"],
-            "dependencies": ["pandas=0.22=py36"],
+            "conda_dependencies": ["pandas=0.22=py36"],
             "local": {"pandas": "0.23=py36"},
             "expected": ["-pandas=0.22=py36", "+pandas=0.23=py36"],
         },
         {
             "packages": ["pandas"],
-            "dependencies": ["pandas=0.22=py36"],
+            "conda_dependencies": ["pandas=0.22=py36"],
             "local": {"pandas": "0.23=py36", "pytest": "0.11=py36"},
             "expected": ["-pandas=0.22=py36", "+pandas=0.23=py36", "+pytest=0.11=py36"],
         },
         {
             "packages": ["python"],
-            "dependencies": ["pandas=0.22=py36"],
+            "conda_dependencies": ["pandas=0.22=py36"],
             "local": {"pandas": "0.23=py36", "pytest": "0.11=py36"},
             "expected": [
                 "-python",
@@ -60,22 +61,23 @@ def expected_diff(mocker, request):
     """Set up for diff function"""
 
     packages = request.param["packages"]
-    dependencies = request.param["dependencies"]
+    conda_dependencies = request.param["conda_dependencies"]
     local = request.param["local"]
     name = "test-diff"
     mocker.patch("conda_env_tracker.gateways.io.Path.mkdir")
     mocker.patch("conda_env_tracker.gateways.io.Path.write_text")
+    dependencies = {"conda": conda_dependencies, "pip": {}}
     mocker.patch(
-        "conda_env_tracker.env.get_dependencies",
-        mocker.Mock(return_value={"conda": dependencies, "pip": {}}),
+        "conda_env_tracker.env.get_dependencies", mocker.Mock(return_value=dependencies)
     )
-    history = History(
+    history = History.create(
         name=name,
-        packages=HistoryPackages.create(packages=packages),
+        packages=PackageRevision.create(packages=packages, dependencies=dependencies),
         channels=None,
         logs=None,
         actions=None,
         debug=None,
+        diff=None,
     )
     env = Environment(name=name, history=history)
     mocker.patch("conda_env_tracker.main.Environment.read", return_value=env)
@@ -88,7 +90,8 @@ def expected_diff(mocker, request):
         },
     )
     mocker.patch(
-        "conda_env_tracker.history.get_dependencies", return_value={"conda": local}
+        "conda_env_tracker.history.history.get_dependencies",
+        return_value={"conda": local},
     )
     yield request.param["expected"]
     if (USER_ENVS_DIR / name).exists():
@@ -111,28 +114,27 @@ def expected_update(mocker):
     mocker.patch("conda_env_tracker.gateways.io.Path.mkdir")
     mocker.patch("conda_env_tracker.gateways.io.Path.write_text")
     mocker.patch("conda_env_tracker.gateways.io.Path.iterdir")
-    mocker.patch("conda_env_tracker.history.get_pip_version", return_value=None)
-    history = History(
+    mocker.patch("conda_env_tracker.history.debug.get_pip_version", return_value=None)
+    dependencies = {
+        "conda": {
+            "pandas": Package("pandas", "pandas", "0.23", "py36"),
+            "pytest": Package("pytest", "pytest", "0.1", "py36"),
+        },
+        "pip": {},
+    }
+    mocker.patch("conda_env_tracker.env.get_dependencies", return_value=dependencies)
+    mocker.patch("conda_env_tracker.env.EnvIO.export_packages")
+    history = History.create(
         name=name,
         channels=Channels([channel]),
-        packages=HistoryPackages.create(packages),
-        logs=Logs.create(create_cmd),
+        packages=PackageRevision.create(packages, dependencies=dependencies),
+        logs=Logs(create_cmd),
         actions=Actions.create(
             name="test-update", specs=["pandas"], channels=Channels([channel])
         ),
+        diff=Diff.create(packages, dependencies=dependencies),
         debug=Debug(),
     )
-    mocker.patch(
-        "conda_env_tracker.env.get_dependencies",
-        return_value={
-            "conda": {
-                "pandas": Package("pandas", "pandas", "0.23", "py36"),
-                "pytest": Package("pytest", "pytest", "0.1", "py36"),
-            },
-            "pip": {},
-        },
-    )
-    mocker.patch("conda_env_tracker.env.EnvIO.export_packages")
     mocker.patch(
         "conda_env_tracker.main.Environment.read",
         return_value=Environment(name=name, history=history),

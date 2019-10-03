@@ -42,11 +42,22 @@ def test_remote_end_to_end(end_to_end_setup, mocker):
 
     remove_package_from_history(env, "pytest")
 
+    conda_dependencies = env.dependencies["conda"]
     assert env.local_io.get_history() != remote_io.get_history()
     assert env.history.packages == {
         "conda": {
-            "python": Package.from_spec("python=3.6"),
-            "colorama": Package.from_spec("colorama"),
+            "python": Package(
+                "python",
+                "python=3.6",
+                version=conda_dependencies["python"].version,
+                build=conda_dependencies["python"].build,
+            ),
+            "colorama": Package(
+                "colorama",
+                "colorama",
+                version=conda_dependencies["colorama"].version,
+                build=conda_dependencies["colorama"].build,
+            ),
         }
     }
 
@@ -63,12 +74,33 @@ def test_remote_end_to_end(end_to_end_setup, mocker):
     )
     env = pull(name=env.name, yes=True)
 
+    conda_dependencies = env.dependencies["conda"]
     assert env.history.packages == {
         "conda": {
-            "python": Package.from_spec("python=3.6"),
-            "colorama": Package.from_spec("colorama"),
-            "pytest": Package.from_spec("pytest"),
-            "pytest-cov": Package.from_spec("pytest-cov"),
+            "python": Package(
+                "python",
+                "python=3.6",
+                version=conda_dependencies["python"].version,
+                build=conda_dependencies["python"].build,
+            ),
+            "colorama": Package(
+                "colorama",
+                "colorama",
+                version=conda_dependencies["colorama"].version,
+                build=conda_dependencies["colorama"].build,
+            ),
+            "pytest": Package(
+                "pytest",
+                "pytest",
+                version=conda_dependencies["pytest"].version,
+                build=conda_dependencies["pytest"].build,
+            ),
+            "pytest-cov": Package(
+                "pytest-cov",
+                "pytest-cov",
+                version=conda_dependencies["pytest-cov"].version,
+                build=conda_dependencies["pytest-cov"].build,
+            ),
         }
     }
 
@@ -79,8 +111,8 @@ def test_remote_end_to_end(end_to_end_setup, mocker):
     ]
     assert env.history.logs == log_list
 
-    actual_env = (env.local_io.env_dir / "conda-env.yaml").read_text()
-    dependencies = get_dependencies(name=env.name)["conda"]
+    actual_env = (env.local_io.env_dir / "environment.yml").read_text()
+    conda_dependencies = get_dependencies(name=env.name)["conda"]
     expected_env = [f"name: {env.name}", "channels:"]
     for channel in channels + ["nodefaults"]:
         expected_env.append(f"  - {channel}")
@@ -89,10 +121,10 @@ def test_remote_end_to_end(end_to_end_setup, mocker):
             expected_env
             + [
                 "dependencies:",
-                "  - python=" + dependencies["python"].version,
-                "  - colorama=" + dependencies["colorama"].version,
-                "  - pytest=" + dependencies["pytest"].version,
-                "  - pytest-cov=" + dependencies["pytest-cov"].version,
+                "  - python=" + conda_dependencies["python"].version,
+                "  - colorama=" + conda_dependencies["colorama"].version,
+                "  - pytest=" + conda_dependencies["pytest"].version,
+                "  - pytest-cov=" + conda_dependencies["pytest-cov"].version,
             ]
         )
         + "\n"

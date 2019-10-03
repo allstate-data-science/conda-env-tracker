@@ -1,4 +1,4 @@
-"""Test the history and conda-env.yaml file after create and install."""
+"""Test the history and environment.yml file after create and install."""
 import re
 import subprocess
 from datetime import date
@@ -20,6 +20,7 @@ from conda_env_tracker.gateways.utils import get_platform_name
 def test_history_after_create(end_to_end_setup):
     """Test the history.yaml in detail."""
     name = end_to_end_setup["name"]
+    env = end_to_end_setup["env"]
     env_dir = end_to_end_setup["env_dir"]
     channels = end_to_end_setup["channels"]
     channel_command = end_to_end_setup["channel_command"]
@@ -32,10 +33,9 @@ def test_history_after_create(end_to_end_setup):
 
     action_expected_pattern = rf"(conda create --name {name})(\s)(python=3.6)(.*)(\s)(colorama=)(.*)({channel_command})"
 
-    expected_packages = {"conda": {"colorama": "*", "python": "3.6"}}
-    expected_logs = [
-        f"conda create --name {name} python=3.6 colorama {channel_command}"
-    ]
+    expected_packages = {"conda": {"colorama": "*", "python": "python=3.6"}}
+    expected_log = f"conda create --name {name} python=3.6 colorama {channel_command}"
+
     expected_debug = [
         {
             "platform": get_platform_name(),
@@ -46,17 +46,23 @@ def test_history_after_create(end_to_end_setup):
     ]
 
     assert actual["packages"] == expected_packages
-    assert actual["logs"] == expected_logs
+    assert actual["revisions"][-1]["log"] == expected_log
     assert actual["channels"] == channels
-    assert re.match(action_expected_pattern, actual["actions"][0])
-    assert len(actual["actions"]) == 1
+    assert re.match(action_expected_pattern, actual["revisions"][0]["action"])
     for key, val in expected_debug[0].items():
         if key == "timestamp":
-            assert actual["debug"][0][key].startswith(val)
+            assert actual["revisions"][0]["debug"][key].startswith(val)
         else:
-            assert actual["debug"][0][key] == val
+            assert actual["revisions"][0]["debug"][key] == val
 
-    expected_start = [f"name: {name}", "channels:"]
+    conda_dependencies = env.dependencies["conda"]
+
+    expected_start = [
+        f"name: {name}",
+        f"id: {env.history.id}",
+        "history-file-version: '1.0'",
+        "channels:",
+    ]
     for channel in channels:
         expected_start.append(f"  - {channel}")
     expected_history_start = "\n".join(
@@ -64,23 +70,34 @@ def test_history_after_create(end_to_end_setup):
         + [
             "packages:",
             "  conda:",
-            "    python: '3.6'",
+            "    python: python=3.6",
             "    colorama: '*'",
-            "logs:",
-            "  - conda create --name end_to_end_test python=3.6 colorama --override-channels --strict-channel-priority",
-            "    --channel main",
-            "actions:",
-            f"  - conda create --name {name} python=3.6",
+            "revisions:",
+            "  - packages:",
+            "      conda:",
+            "        python: python=3.6",
+            "        colorama: '*'",
+            "    diff:",
+            "      conda:",
+            "        upsert:",
+            f"        - python={conda_dependencies['python'].version}",
+            f"        - colorama={conda_dependencies['colorama'].version}",
+            f"    log: conda create --name {name} python=3.6 colorama --override-channels",
+            "      --strict-channel-priority --channel main",
+            f"    action: conda create --name {name} python=3.6",
         ]
     )
-    end = actual_history_content.rfind("python=3.6") + len("python=3.6")
-    actual_history_start = actual_history_content[:end]
+    first_action_start = f"action: conda create --name {name} python=3.6"
+    index_first_action = actual_history_content.find(first_action_start) + len(
+        first_action_start
+    )
+    actual_history_start = actual_history_content[:index_first_action]
     assert actual_history_start == expected_history_start
 
 
 @pytest.mark.run(order=-6)
 def test_conda_env_yaml_after_create(end_to_end_setup):
-    """Test the conda-env.yaml file in detail."""
+    """Test the environment.yml file in detail."""
     name = end_to_end_setup["name"]
     env_dir = end_to_end_setup["env_dir"]
     channels = end_to_end_setup["channels"]
@@ -99,7 +116,7 @@ def test_conda_env_yaml_after_create(end_to_end_setup):
 
     expected = "\n".join(expected_start + expected_packages) + "\n"
 
-    actual = (env_dir / "conda-env.yaml").read_text()
+    actual = (env_dir / "environment.yml").read_text()
     print(actual)
     assert actual == expected
 
@@ -109,7 +126,7 @@ def test_history_after_install(end_to_end_setup):
     """Test the history.yaml file in detail after pytest has been installed."""
     name = end_to_end_setup["name"]
 
-    conda_install(name=name, specs=["pytest"], yes=True)
+    env = conda_install(name=name, specs=["pytest>4.0,<6.0"], yes=True)
 
     env_dir = end_to_end_setup["env_dir"]
     channels = end_to_end_setup["channels"]
@@ -125,8 +142,10 @@ def test_history_after_install(end_to_end_setup):
         rf"(conda install --name {name})(\s)(pytest=)(.*)({channel_command})"
     )
 
-    expected_packages = {"conda": {"colorama": "*", "python": "3.6", "pytest": "*"}}
-    expected_log = f"conda install --name {name} pytest"
+    expected_packages = {
+        "conda": {"colorama": "*", "python": "python=3.6", "pytest": "pytest>4.0,<6.0"}
+    }
+    expected_log = f'conda install --name {name} "pytest>4.0,<6.0"'
     expected_debug = 2 * [
         {
             "platform": get_platform_name(),
@@ -137,44 +156,64 @@ def test_history_after_install(end_to_end_setup):
     ]
 
     assert actual["packages"] == expected_packages
-    assert actual["logs"][-1] == expected_log
-    assert len(actual["logs"]) == 2
+    assert len(actual["revisions"]) == 2
+    assert actual["revisions"][-1]["log"] == expected_log
     assert actual["channels"] == channels
-    assert re.match(action_install_expected_pattern, actual["actions"][-1])
-    assert len(actual["actions"]) == 2
+    assert re.match(action_install_expected_pattern, actual["revisions"][-1]["action"])
     for key, val in expected_debug[1].items():
         if key == "timestamp":
-            assert actual["debug"][1][key].startswith(val)
+            assert actual["revisions"][1]["debug"][key].startswith(val)
         else:
-            assert actual["debug"][1][key] == val
+            assert actual["revisions"][1]["debug"][key] == val
 
-    expected_start = [f"name: {name}", "channels:"]
-    for channel in channels:
-        expected_start.append(f"  - {channel}")
-    expected_history_start = "\n".join(
-        expected_start
-        + [
+    # The packages section at the top of the file is current
+    expected_packages_section = "\n".join(
+        [
             "packages:",
             "  conda:",
-            "    python: '3.6'",
+            "    python: python=3.6",
             "    colorama: '*'",
-            "    pytest: '*'",
-            "logs:",
-            "  - conda create --name end_to_end_test python=3.6 colorama --override-channels --strict-channel-priority",
-            "    --channel main",
-            f"  - {expected_log}",
-            "actions:",
-            f"  - conda create --name {name} python=3.6",
+            "    pytest: pytest>4.0,<6.0",
+            "revisions:",
         ]
     )
-    end = actual_history_content.rfind("python=3.6") + len("python=3.6")
-    actual_history_start = actual_history_content[:end]
-    assert actual_history_start == expected_history_start
+    assert expected_packages_section in actual_history_content
+
+    conda_dependencies = env.dependencies["conda"]
+
+    expected_second_revision = "\n".join(
+        [
+            "  - packages:",
+            "      conda:",
+            "        python: python=3.6",
+            "        colorama: '*'",
+            "        pytest: pytest>4.0,<6.0",
+            "    diff:",
+            "      conda:",
+            "        upsert:",
+            f"        - pytest={conda_dependencies['pytest'].version}",
+            f'    log: conda install --name {name} "pytest>4.0,<6.0"',
+            f"    action: conda install --name {name} pytest",
+        ]
+    )
+
+    index_first_revision = actual_history_content.find("  - packages:")
+    index_second_revision_start = actual_history_content.find(
+        "  - packages:", index_first_revision + 1
+    )
+    second_action = f"action: conda install --name {name} pytest"
+    index_second_action = actual_history_content.find(
+        second_action, index_second_revision_start
+    ) + len(second_action)
+    actual_second_revision = actual_history_content[
+        index_second_revision_start:index_second_action
+    ]
+    assert actual_second_revision == expected_second_revision
 
 
 @pytest.mark.run(order=-4)
 def test_conda_env_yaml_after_install(end_to_end_setup):
-    """Test the conda-env.yaml file in detail after pytest has been installed."""
+    """Test the environment.yml file in detail after pytest has been installed."""
     name = end_to_end_setup["name"]
     env_dir = end_to_end_setup["env_dir"]
     channels = end_to_end_setup["channels"]
@@ -194,7 +233,7 @@ def test_conda_env_yaml_after_install(end_to_end_setup):
 
     expected = "\n".join(expected_start + expected_packages) + "\n"
 
-    actual = (env_dir / "conda-env.yaml").read_text()
+    actual = (env_dir / "environment.yml").read_text()
     print(actual)
     assert actual == expected
 
@@ -207,7 +246,7 @@ def test_rebuild(end_to_end_setup):
 
     env_dir = end_to_end_setup["env_dir"]
     initial_history_content = (env_dir / "history.yaml").read_text()
-    initial_env_file = (env_dir / "conda-env.yaml").read_text()
+    initial_env_file = (env_dir / "environment.yml").read_text()
     initial_process = subprocess.run(
         f"conda list --name {name} --revisions",
         shell=True,
@@ -226,7 +265,7 @@ def test_rebuild(end_to_end_setup):
     assert name in environments
 
     final_history_content = (env_dir / "history.yaml").read_text()
-    final_env_file = (env_dir / "conda-env.yaml").read_text()
+    final_env_file = (env_dir / "environment.yml").read_text()
     assert final_env_file == initial_env_file
     assert final_history_content == initial_history_content
 
@@ -262,7 +301,7 @@ def test_remove_package(end_to_end_setup):
 
     conda_remove(name=name, specs=["colorama"], yes=True)
 
-    actual_env_content = (env_dir / "conda-env.yaml").read_text()
+    actual_env_content = (env_dir / "environment.yml").read_text()
     assert "colorama" not in actual_env_content
 
     log_file = env_dir / "history.yaml"
@@ -271,7 +310,7 @@ def test_remove_package(end_to_end_setup):
 
     actual = yaml.load(actual_history_content, Loader=yaml.FullLoader)
 
-    expected_packages = {"conda": {"python": "3.6", "pytest": "*"}}
+    expected_packages = {"conda": {"python": "python=3.6", "pytest": "pytest>4.0,<6.0"}}
     expected_log = f"conda remove --name {name} colorama"
     expected_debug = {
         "platform": get_platform_name(),
@@ -281,43 +320,60 @@ def test_remove_package(end_to_end_setup):
     }
 
     assert actual["packages"] == expected_packages
-    assert actual["logs"][-1] == expected_log
-    assert len(actual["logs"]) == 3
+    assert len(actual["revisions"]) == 3
+    assert actual["revisions"][-1]["log"] == expected_log
     assert actual["channels"] == channels
     assert (
-        actual["actions"][-1]
+        actual["revisions"][-1]["action"]
         == f"conda remove --name {name} colorama {channel_command}"
     )
-    assert len(actual["actions"]) == 3
     for key, val in expected_debug.items():
         if key == "timestamp":
-            assert actual["debug"][2][key].startswith(val)
+            assert actual["revisions"][2]["debug"][key].startswith(val)
         else:
-            assert actual["debug"][2][key] == val
+            assert actual["revisions"][2]["debug"][key] == val
 
-    expected_start = [f"name: {name}", "channels:"]
-    for channel in channels:
-        expected_start.append(f"  - {channel}")
-    expected_history_start = "\n".join(
-        expected_start
-        + [
+    # The packages section at the top of the file is current
+    expected_packages_section = "\n".join(
+        [
             "packages:",
             "  conda:",
-            "    python: '3.6'",
-            "    pytest: '*'",
-            "logs:",
-            "  - conda create --name end_to_end_test python=3.6 colorama --override-channels --strict-channel-priority",
-            "    --channel main",
-            f"  - conda install --name {name} pytest",
-            f"  - {expected_log}",
-            "actions:",
-            f"  - conda create --name {name} python=3.6",
+            "    python: python=3.6",
+            "    pytest: pytest>4.0,<6.0",
+            "revisions:",
         ]
     )
+    assert expected_packages_section in actual_history_content
 
-    end = actual_history_content.rfind("python=3.6") + len("python=3.6")
-    actual_history_start = actual_history_content[:end]
-    assert actual_history_start == expected_history_start
+    expected_third_revision = "\n".join(
+        [
+            "  - packages:",
+            "      conda:",
+            "        python: python=3.6",
+            "        pytest: pytest>4.0,<6.0",
+            "    diff:",
+            "      conda:",
+            "        remove:",
+            "        - colorama",
+            f"    log: conda remove --name {name} colorama",
+            f"    action: conda remove --name {name} colorama",
+        ]
+    )
+    index_first_revision = actual_history_content.find("  - packages:")
+    index_second_revision = actual_history_content.find(
+        "  - packages:", index_first_revision + 1
+    )
+    index_third_revision = actual_history_content.find(
+        "  - packages:", index_second_revision + 1
+    )
+    third_action = f"    action: {expected_log}"
+    index_third_action = actual_history_content.find(
+        third_action, index_third_revision
+    ) + len(third_action)
+    actual_third_revision = actual_history_content[
+        index_third_revision:index_third_action
+    ]
+    assert actual_third_revision == expected_third_revision
 
 
 @pytest.mark.run(order=-1)

@@ -1,8 +1,8 @@
 """User facing interface to all internal functionality. Each function is equivalent to the command line interface."""
 
 from datetime import date
-import os
 import logging
+import os
 from typing import Optional, Union
 
 from conda_env_tracker.env import Environment
@@ -25,13 +25,13 @@ from conda_env_tracker.history import History
 from conda_env_tracker.packages import get_packages, Package, Packages
 from conda_env_tracker.pip import PipHandler, PIP_DEFAULT_INDEX_URL
 from conda_env_tracker.r import RHandler
+from conda_env_tracker.specs import process_specs, process_r_specs
 from conda_env_tracker.types import ListLike, PathLike
 from conda_env_tracker.utils import prompt_yes_no
 from conda_env_tracker.validate import (
-    clean_specs,
-    clean_r_specs,
     check_pip,
     check_r_base_package,
+    validate_remote_if_missing,
 )
 
 TODAY = str(date.today())
@@ -51,7 +51,7 @@ def create(
     strict_channel_priority: bool = True,
 ) -> Environment:
     """create conda environment given environment name and packages to install"""
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     env = Environment.create(
         name=name,
         packages=cleaned,
@@ -67,7 +67,7 @@ def create(
 
 def infer(name: str, specs: ListLike, channels: ListLike = None) -> Environment:
     """infer environment from existing conda environment"""
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     env = Environment.infer(name=name, packages=cleaned, channels=channels)
     return env
 
@@ -121,7 +121,7 @@ def conda_install(
 ) -> Environment:
     """Install conda packages into the environment."""
     env = Environment.read(name=name)
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     CondaHandler(env=env).install(
         packages=cleaned,
         channels=channels,
@@ -144,7 +144,7 @@ def conda_update(
 ) -> Environment:
     """Install conda packages into the environment."""
     env = Environment.read(name=name)
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     if all:
         CondaHandler(env=env).update_all(
             packages=cleaned,
@@ -168,7 +168,7 @@ def conda_remove(
 ) -> Environment:
     """Remove conda packages into the environment."""
     env = Environment.read(name=name)
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     CondaHandler(env=env).remove(packages=cleaned, channels=channels, yes=yes)
     _ask_user_to_sync(name=name, yes=yes)
     return env
@@ -183,7 +183,7 @@ def pip_install(
     """Install pip packages into the environment."""
     env = Environment.read(name=name)
     check_pip(env=env)
-    cleaned = clean_specs(specs, check_custom=True)
+    cleaned = process_specs(specs, check_custom=True)
     PipHandler(env=env).install(packages=cleaned, index_url=index_url)
     _ask_user_to_sync(name=name, yes=yes)
     return env
@@ -193,7 +193,7 @@ def pip_remove(name: str, specs: ListLike, yes: bool = False) -> Environment:
     """Remove pip packages including custom packages"""
     env = Environment.read(name=name)
     check_pip(env=env)
-    cleaned = clean_specs(specs)
+    cleaned = process_specs(specs)
     PipHandler(env=env).remove(packages=cleaned, yes=yes)
     _ask_user_to_sync(name=name, yes=yes)
     return env
@@ -217,7 +217,7 @@ def r_install(
     """Install R packages with corresponding R command."""
     env = Environment.read(name=name)
     check_r_base_package(env=env)
-    packages = clean_r_specs(package_names=package_names, commands=commands)
+    packages = process_r_specs(package_names=package_names, commands=commands)
     RHandler(env=env).install(packages=packages)
     _ask_user_to_sync(name=name, yes=yes)
     return env
@@ -243,13 +243,23 @@ def setup_remote(
     if not remote_dir:
         remote_dir = infer_remote_dir(check_history_exists=False)
     env_io = EnvIO(env_directory=USER_ENVS_DIR / name)
-    env_io.set_remote_dir(remote_dir=remote_dir, if_missing=if_missing, yes=yes)
+    validate_remote_if_missing(
+        env_io=env_io, remote_dir=remote_dir, yes=yes, if_missing=if_missing
+    )
+    env_io.set_remote_dir(remote_dir=remote_dir, yes=yes)
 
 
-def setup_auto(activate: bool = False, sync: bool = False, yes: bool = False) -> None:
-    """Setup the automatic use of cet push/pull when navigating to git repos"""
+def setup_auto_shell_file() -> None:
+    """Setup the automatic use of conda env tracker push/pull when navigating to git repos"""
     # pylint: disable=redefined-outer-name
     link_auto()
+
+
+def setup_auto_bash_config(
+    activate: bool = False, sync: bool = False, yes: bool = False
+):
+    """Setup bash config to automatically use conda env tracker push/pull when navigating to git repos"""
+    # pylint: disable=redefined-outer-name
     add_auto_to_bash_config_file(activate=activate, sync=sync, yes=yes)
 
 
@@ -269,10 +279,10 @@ def update_packages(name: str, specs: ListLike, remove: ListLike) -> Environment
     env = Environment.read(name=name)
     handler = CondaHandler(env=env)
     if remove:
-        cleaned_remove = clean_specs(remove)
+        cleaned_remove = process_specs(remove)
         handler.update_history_remove(packages=cleaned_remove)
     if specs:
-        cleaned = clean_specs(specs)
+        cleaned = process_specs(specs)
         handler.update_history_install(packages=cleaned)
     env.export()
     return env

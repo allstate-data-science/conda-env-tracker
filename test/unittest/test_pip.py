@@ -59,7 +59,7 @@ def test_pip_install(setup_env, packages, pip_dependencies, mocker):
 
 def test_pip_custom_install(setup_env, mocker):
     pip_package_url = "https://s3.amazonaws.com/h2o-release/h2o/master/4765/Python/h2o-3.26.0.4765-py2.py3-none-any.whl"
-    pip_dependencies = {"h2o": Package("h2o", pip_package_url)}
+    pip_dependencies = {"h2o": Package("h2o", pip_package_url, "3.26.0.4765")}
     package = Package("h2o", pip_package_url)
 
     env = setup_env["env"]
@@ -89,7 +89,7 @@ def test_pip_custom_install(setup_env, mocker):
 
 def test_pip_custom_install_github(setup_env, mocker):
     pip_package_url = "git+ssh://git@github.com/pandas-dev/pandas"
-    pip_dependencies = {"pandas": Package("pandas", pip_package_url)}
+    pip_dependencies = {"pandas": Package("pandas", pip_package_url, "0.23.0")}
     package = Package("pandas", pip_package_url)
 
     env = setup_env["env"]
@@ -122,7 +122,7 @@ def setup_pip_env(setup_env, mocker):
     """Set up for pip remove"""
     pip_package_url = "git+ssh://git@github.com/pandas-dev/pandas"
     pip_dependencies = {
-        "pandas": Package("pandas", pip_package_url),
+        "pandas": Package("pandas", pip_package_url, "0.23.0"),
         "pytest": Package("pytest", "pytest", "4.0.0"),
     }
     env = setup_env["env"]

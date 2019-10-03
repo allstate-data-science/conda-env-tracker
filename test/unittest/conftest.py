@@ -96,7 +96,8 @@ def setup_env(mocker, request):
     the option itself don't show up in actions and logs as it provide no additional value for reproducibility."""
     env_dir = USER_ENVS_DIR / ENV_NAME
     mocker.patch(
-        "conda_env_tracker.history.get_pip_version", mocker.Mock(return_value="18.1")
+        "conda_env_tracker.history.debug.get_pip_version",
+        mocker.Mock(return_value="18.1"),
     )
     mocker.patch("conda_env_tracker.env.get_all_existing_environment")
     mocker.patch("conda_env_tracker.main._ask_user_to_sync")
@@ -115,6 +116,8 @@ def setup_env(mocker, request):
         channels = request.param["input"]["channels"]
     else:
         channels = condarc_channels
+    id_mock = mocker.patch("conda_env_tracker.history.history.uuid4")
+    id_mock.return_value = "my_unique_id"
     env = main.create(name=ENV_NAME, **request.param["input"])
     env_io = EnvIO(env_directory=env_dir)
     yield {
@@ -124,6 +127,7 @@ def setup_env(mocker, request):
         "expected": request.param["expected"],
         "get_package_mock": get_package_mock,
         "initial_conda_packages": initial_conda_packages,
+        "id": id_mock,
     }
     if env_dir.exists():
         shutil.rmtree(env_dir)

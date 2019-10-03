@@ -43,8 +43,10 @@ class PipHandler:
     ):
         """Update history for pip install."""
         self.env.update_dependencies()
-        self.env.history.packages.update_packages(packages, source="pip")
-        self.env.validate_installed_packages(packages)
+        self.env.history.update_packages(
+            packages=packages, dependencies=self.env.dependencies, source="pip"
+        )
+        self.env.validate_packages(packages, source="pip")
 
         log = get_pip_install_command(packages=packages, index=index_url)
 
@@ -62,8 +64,10 @@ class PipHandler:
     def update_history_custom_urls(self, package: Package):
         """Update history for pip install with custom urls"""
         self.env.update_dependencies()
-        self.env.history.packages.update_packages(Packages(package), source="pip")
-        self.env.validate_installed_packages(Packages(package))
+        self.env.history.update_packages(
+            packages=Packages(package), dependencies=self.env.dependencies, source="pip"
+        )
+        self.env.validate_packages(Packages(package), source="pip")
         log = get_pip_custom_install_command(spec=package.spec)
         self.env.history.append(log=log, action=log)
 
@@ -76,7 +80,9 @@ class PipHandler:
 
     def update_history_remove(self, packages: Packages) -> None:
         """Update history for pip remove."""
-        self.env.history.packages.remove_packages(packages, source="pip")
-        self.env.validate_installed_packages(packages)
+        self.env.history.remove_packages(
+            packages=packages, dependencies=self.env.dependencies, source="pip"
+        )
+        self.env.validate_packages(source="pip")
         remove_command = get_pip_remove_command(packages=packages, yes=False)
         self.env.history.append(log=remove_command, action=remove_command)

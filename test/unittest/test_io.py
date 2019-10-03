@@ -5,9 +5,35 @@ import shutil
 
 import pytest
 
+from conda_env_tracker.channels import Channels
 from conda_env_tracker.gateways import io
 from conda_env_tracker.errors import WindowsError
-from conda_env_tracker.history import History, Channels, HistoryPackages, Logs, Actions
+from conda_env_tracker.history import (
+    Actions,
+    Diff,
+    History,
+    Logs,
+    PackageRevision,
+    Revisions,
+)
+from conda_env_tracker.packages import Package
+
+
+CET_AUTO_BASHRC_ADDITION = f"""
+# >>> cet auto >>>
+# !! Contents within this block are managed by 'cet auto' !!
+# Check that cet command works (exit code 0)
+command cet >/dev/null 2>/dev/null
+if [ $? = 0 ] ; then
+    # Check if cet-auto.sh link is broken, can happen during python version changes
+    CET_AUTO_SHELL_FILE="{Path.home() / '.cet' / 'cet-auto.sh'}"
+    if [ -L "$CET_AUTO_SHELL_FILE" ] && [ ! -e "$CET_AUTO_SHELL_FILE" ] ; then
+        cet auto --ignore-bash-config
+    fi
+    source "$CET_AUTO_SHELL_FILE"
+fi
+# <<< cet auto <<<
+"""
 
 
 @pytest.fixture(scope="function")
@@ -36,58 +62,84 @@ def test_get_history(env_io):
 def test_write_history_file(env_io):
     """Test to create history yaml file and test get history"""
     env_io.write_history_file(
-        History(
-            name="",
-            channels=Channels([]),
-            packages=HistoryPackages({}),
-            logs=Logs([]),
-            actions=Actions([]),
-            debug=[],
+        History.create(
+            name="test-env",
+            channels=Channels(["main"]),
+            packages=PackageRevision(
+                {"conda": {"python": Package.from_spec("python")}}
+            ),
+            logs=Logs(["conda create -n test-env python"]),
+            actions=Actions(
+                [
+                    "conda create -n test-env python=3.7.3=buildstring --override-channels --channel main"
+                ]
+            ),
+            diff=Diff(
+                {"conda": {"upsert": {"python": Package("python", version="3.7.3")}}}
+            ),
+            debug=["blah"],
         )
     )
-    assert [] == env_io.get_history().channels
-    assert {} == env_io.get_history().packages
-    assert [] == env_io.get_history().logs
-    assert [] == env_io.get_history().debug
+    assert ["main"] == env_io.get_history().channels
+    assert {
+        "conda": {"python": Package.from_spec("python")}
+    } == env_io.get_history().packages
+    assert (
+        Revisions(
+            **{
+                "logs": ["conda create -n test-env python"],
+                "actions": [
+                    "conda create -n test-env python=3.7.3=buildstring --override-channels --channel main"
+                ],
+                "packages": [{"conda": {"python": Package.from_spec("python")}}],
+                "diffs": [
+                    {
+                        "conda": {
+                            "upsert": {
+                                "python": Package("python", "python", version="3.7.3")
+                            }
+                        }
+                    }
+                ],
+                "debug": ["blah"],
+            }
+        )
+        == env_io.get_history().revisions
+    )
 
 
 def test_set_remote_dir(env_io, mocker):
     """Test to create remote setup file and assert remote dir path"""
-    env_io.set_remote_dir(remote_dir="/nas/isg_prodops_work/connectedcar/riskmap")
-    assert env_io.get_remote_dir() == "/nas/isg_prodops_work/connectedcar/riskmap"
+    env_io.set_remote_dir(remote_dir="/dir1/dir2/dir3/dir4")
+    assert env_io.get_remote_dir() == "/dir1/dir2/dir3/dir4"
     # User selects 'n' from prompt and does not update remote file
-    mocker.patch(
-        "conda_env_tracker.utils.prompt_yes_no", mocker.Mock(return_value=False)
-    )
-    env_io.set_remote_dir(remote_dir="riskmap")
-    assert env_io.get_remote_dir() == "/nas/isg_prodops_work/connectedcar/riskmap"
+    mocker.patch("conda_env_tracker.utils.prompt_yes_no", return_value=False)
+    env_io.set_remote_dir(remote_dir="dir4")
+    assert env_io.get_remote_dir() == "/dir1/dir2/dir3/dir4"
     # User selects 'y' from prompt and updates file with new remote directory
-    mocker.patch(
-        "conda_env_tracker.utils.prompt_yes_no", mocker.Mock(return_value=True)
-    )
-    env_io.set_remote_dir(remote_dir="riskmap")
-    assert env_io.get_remote_dir() == str(Path.cwd() / "riskmap")
+    mocker.patch("conda_env_tracker.utils.prompt_yes_no", return_value=True)
+    env_io.set_remote_dir(remote_dir="dir4")
+    assert env_io.get_remote_dir() == str(Path.cwd() / "dir4")
 
 
 def test_set_remote_dir_if_missing(env_io, mocker):
     """Test to create remote setup file using if_missing parameter. Error if file exists with a new path"""
     path = Path("/path/to/remote")
-    env_io.set_remote_dir(remote_dir=path, if_missing=True)
+    env_io.set_remote_dir(remote_dir=path)
     assert env_io.get_remote_dir() == str(path)
     new_path = Path("/new/path/to/new/remote")
-    with pytest.raises(SystemExit):
-        env_io.set_remote_dir(remote_dir=new_path, if_missing=True)
-    env_io.set_remote_dir(remote_dir=new_path, if_missing=True, yes=True)
+
+    env_io.set_remote_dir(remote_dir=new_path, yes=True)
     assert env_io.get_remote_dir() == str(new_path)
     write_mock = mocker.patch("pathlib.Path.write_text")
-    env_io.set_remote_dir(remote_dir=new_path, if_missing=True)
+    env_io.set_remote_dir(remote_dir=new_path)
     write_mock.assert_not_called()
 
 
 def test_copy_environment_from_local_to_remote(env_io, remote_dir):
     """Must copy local history file, env files. Does not copy remote.txt."""
     env_dir = env_io.env_dir
-    expected_files = {"history.yaml", "conda-env.yaml"}
+    expected_files = {"history.yaml", "environment.yml"}
     for file_name in expected_files:
         (env_dir / file_name).touch()
     (env_dir / "remote.txt").touch()
@@ -221,8 +273,7 @@ def test_add_auto_to_bash_occurs(mocker, platform, bashrc_contents):
         mocker.Mock(return_value=platform),
     )
     mocker.patch("os.path.getmtime", return_value=0)
-    addition = f"\nsource {Path.home()}/.cet/cet-auto.sh\n"
-    expected = bashrc_contents + addition
+    expected = bashrc_contents + CET_AUTO_BASHRC_ADDITION
 
     io.add_auto_to_bash_config_file()
 
@@ -233,8 +284,49 @@ def test_add_auto_to_bash_occurs(mocker, platform, bashrc_contents):
 @pytest.mark.parametrize(
     "platform, bashrc_contents",
     [
-        ("linux", f"file contents\nsource {Path.home()}/.cet/cet-auto.sh\n"),
-        ("osx", f"Some file contents\nsource {Path.home()}/.cet/cet-auto.sh\n"),
+        ("linux", f"source {Path.home() / '.cet' / 'cet-auto.sh'}"),
+        (
+            "osx",
+            f"other text\nsource {Path.home() / '.cet' / 'cet-auto.sh'}\nand more text later",
+        ),
+    ],
+)
+def test_replace_old_auto(mocker, platform, bashrc_contents):
+    write_mock = mocker.patch("conda_env_tracker.gateways.io.Path.write_text")
+    read_mock = mocker.patch(
+        "conda_env_tracker.gateways.io.Path.read_text",
+        mocker.Mock(return_value=bashrc_contents),
+    )
+    mocker.patch(
+        "conda_env_tracker.utils.prompt_yes_no", mocker.Mock(return_value=True)
+    )
+    mocker.patch(
+        "conda_env_tracker.gateways.io.Path.exists", mocker.Mock(return_value=True)
+    )
+    mocker.patch(
+        "conda_env_tracker.gateways.utils.get_platform_name",
+        mocker.Mock(return_value=platform),
+    )
+    mocker.patch("os.path.getmtime", return_value=0)
+    expected = (
+        bashrc_contents.replace(f"source {Path.home() / '.cet' / 'cet-auto.sh'}", "")
+        + CET_AUTO_BASHRC_ADDITION
+    )
+
+    io.add_auto_to_bash_config_file()
+
+    write_mock.assert_called_once_with(expected)
+    read_mock.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "platform, bashrc_contents",
+    [
+        ("linux", f"file contents\n{CET_AUTO_BASHRC_ADDITION}"),
+        (
+            "osx",
+            f"Some more\n>>> conda initialize >>>\nfile contents\n{CET_AUTO_BASHRC_ADDITION}\n",
+        ),
     ],
 )
 def test_add_auto_to_bash_skipped(mocker, platform, bashrc_contents):
@@ -257,6 +349,47 @@ def test_add_auto_to_bash_skipped(mocker, platform, bashrc_contents):
     read_mock.assert_called_once_with()
 
 
+@pytest.mark.parametrize(
+    "platform, bashrc_contents",
+    [
+        (
+            "linux",
+            f"file {CET_AUTO_BASHRC_ADDITION}\n>>> conda initialize >>>\ncontents",
+        ),
+        (
+            "osx",
+            f"Some {CET_AUTO_BASHRC_ADDITION}\n>>> conda initialize >>>\nmore file contents\n",
+        ),
+    ],
+)
+def test_move_auto_to_end_of_bash_config(mocker, platform, bashrc_contents):
+    """Only moved when conda initialize comes after the cet auto section."""
+    write_mock = mocker.patch("conda_env_tracker.gateways.io.Path.write_text")
+    read_mock = mocker.patch(
+        "conda_env_tracker.gateways.io.Path.read_text",
+        mocker.Mock(return_value=bashrc_contents),
+    )
+    mocker.patch(
+        "conda_env_tracker.utils.prompt_yes_no", mocker.Mock(return_value=True)
+    )
+    mocker.patch(
+        "conda_env_tracker.gateways.io.Path.exists", mocker.Mock(return_value=True)
+    )
+    mocker.patch(
+        "conda_env_tracker.gateways.utils.get_platform_name",
+        mocker.Mock(return_value=platform),
+    )
+    mocker.patch("os.path.getmtime", return_value=0)
+    expected = (
+        bashrc_contents.replace(CET_AUTO_BASHRC_ADDITION, "") + CET_AUTO_BASHRC_ADDITION
+    )
+
+    io.add_auto_to_bash_config_file()
+
+    write_mock.assert_called_once_with(expected)
+    read_mock.assert_called_once_with()
+
+
 def test_add_auto_when_bash_missing(mocker):
     write_mock = mocker.patch("conda_env_tracker.gateways.io.Path.write_text")
     read_mock = mocker.patch("conda_env_tracker.gateways.io.Path.read_text")
@@ -266,11 +399,9 @@ def test_add_auto_when_bash_missing(mocker):
     mocker.patch(
         "conda_env_tracker.gateways.io.Path.exists", mocker.Mock(return_value=False)
     )
-    addition = f"\nsource {Path.home()}/.cet/cet-auto.sh\n"
-
     io.add_auto_to_bash_config_file()
 
-    write_mock.assert_called_once_with(addition)
+    write_mock.assert_called_once_with(CET_AUTO_BASHRC_ADDITION)
     read_mock.assert_not_called()
 
 

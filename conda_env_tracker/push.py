@@ -4,15 +4,23 @@ import logging
 from conda_env_tracker.env import Environment
 from conda_env_tracker.gateways.io import EnvIO, USER_ENVS_DIR
 
+
 from conda_env_tracker.utils import is_ordered_subset
-from conda_env_tracker.errors import CondaEnvTrackerPushError, PUSH_ERROR_STR
+from conda_env_tracker.errors import (
+    CondaEnvTrackerRemoteError,
+    CondaEnvTrackerPushError,
+    PUSH_ERROR_STR,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def push(env: Environment) -> Environment:
     """Handle push to remote"""
-    remote_dir = env.local_io.get_remote_dir()
+    try:
+        remote_dir = env.local_io.get_remote_dir()
+    except CondaEnvTrackerRemoteError as remote_err:
+        raise CondaEnvTrackerPushError(str(remote_err))
     remote_io = EnvIO(env_directory=remote_dir)
     remote_history = remote_io.get_history()
 

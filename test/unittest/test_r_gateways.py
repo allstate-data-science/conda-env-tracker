@@ -14,30 +14,65 @@ CONDA_SH_PATH = (
 )
 
 
-def test_export_install_r():
-    custom_command = 'install.packages("h2o")'
-    packages = {"h2o": Package("h2o", custom_command)}
+def test_export_install_r_single_package():
+    packages = Packages(
+        Package(
+            "jsonlite", 'library("devtools"); install_version("jsonlite",version="1.6")'
+        )
+    )
     actual = r.export_install_r(packages)
-    expected = custom_command
+    expected = 'library("devtools"); install_version("jsonlite",version="1.6")'
     assert actual == expected
 
 
-def test_export_install_r_multiple():
-    custom_command_h2o = 'install.packages("h2o")'
-    custom_command_trelliscopejs = (
-        'library("devtools"); install_github("hafen/treslliscopejs")'
+def test_export_install_r_multiple_packages():
+    packages = Packages(
+        [
+            Package(
+                "jsonlite",
+                'library("devtools"); install_version("jsonlite",version="1.6")',
+            ),
+            Package(
+                "praise",
+                'library("devtools"); install_version("praise",version="1.0.0")',
+            ),
+        ]
     )
-    packages = {
-        "h2o": Package("h2o", custom_command_h2o),
-        "trelliscopejs": Package("trelliscopejs", custom_command_trelliscopejs),
-    }
     actual = r.export_install_r(packages)
-    expected = "\n".join([custom_command_h2o, custom_command_trelliscopejs])
+    expected = "\n".join(
+        [
+            'library("devtools"); install_version("jsonlite",version="1.6")',
+            'library("devtools"); install_version("praise",version="1.0.0")',
+        ]
+    )
+    assert actual == expected
+
+
+def test_export_install_r_multiple_installs():
+    packages = Packages(
+        [
+            Package(
+                "jsonlite",
+                'library("devtools"); install_version("jsonlite",version="1.6")',
+            ),
+            Package(
+                "praise",
+                'library("devtools"); install_version("praise",version="1.0.0")',
+            ),
+        ]
+    )
+    actual = r.export_install_r(packages)
+    expected = "\n".join(
+        [
+            'library("devtools"); install_version("jsonlite",version="1.6")',
+            'library("devtools"); install_version("praise",version="1.0.0")',
+        ]
+    )
     assert actual == expected
 
 
 def test_export_install_r_no_r_packages():
-    actual = r.export_install_r({})
+    actual = r.export_install_r(Packages())
     expected = ""
     assert actual == expected
 
@@ -59,10 +94,12 @@ def test_parse_r_packages(mocker):
 
     actual = r.get_r_dependencies(name="env_name")
 
+    escaped_list_r_packages = r.LIST_R_PACKAGES.replace('"', r"\"")
+
     expected_command = (
         f"source {CONDA_SH_PATH} && "
         "conda activate env_name && "
-        f"R --quiet --vanilla -e '{r.LIST_R_PACKAGES}'"
+        f'R --quiet --vanilla -e "{escaped_list_r_packages}"'
     )
 
     run_mock.assert_called_once_with(
@@ -99,7 +136,7 @@ def test_update_r_environment(mocker):
     expected_command = (
         f"source {CONDA_SH_PATH} && "
         "conda activate env_name && "
-        f"R --quiet --vanilla -e 'source(\"{install_r.absolute()}\")'"
+        rf'R --quiet --vanilla -e "source(\"{install_r.absolute()}\")"'
     )
 
     run_mock.assert_called_once_with(expected_command, error=errors.RError)
@@ -138,7 +175,6 @@ def test_r_install_error(mocker):
         r.r_install(
             name="env_name", packages=Packages(Package("jsonlite", expected_command))
         )
-
     assert str(err.value) == (
         "Error installing R packages:\nstderr\n"
         f"environment='env_name' and command='{expected_command}'."

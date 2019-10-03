@@ -7,11 +7,11 @@ import logging
 
 import oyaml as yaml
 
+from conda_env_tracker.channels import Channels
 from conda_env_tracker.errors import (
     CondaEnvTrackerCondaError,
     CondaEnvTrackerInstallError,
     CondaEnvTrackerRemoteError,
-    RError,
 )
 from conda_env_tracker.gateways.conda import (
     conda_create,
@@ -25,12 +25,12 @@ from conda_env_tracker.gateways.conda import (
 from conda_env_tracker.gateways.io import EnvIO, USER_ENVS_DIR
 from conda_env_tracker.gateways.r import export_install_r, get_r_dependencies
 from conda_env_tracker.history import (
-    History,
-    Channels,
-    HistoryPackages,
-    Logs,
     Actions,
     Debug,
+    Diff,
+    History,
+    Logs,
+    PackageRevision,
 )
 from conda_env_tracker.packages import Packages
 from conda_env_tracker.pip import PipHandler
@@ -45,15 +45,25 @@ class Environment:
 
     sources = ["conda", "pip", "r"]
 
-    def __init__(self, name: str, history: Optional[History] = None):
+    def __init__(
+        self,
+        name: str,
+        history: Optional[History] = None,
+        dependencies: Optional[dict] = None,
+    ):
         self.name = name
         self.history = history
         self.local_io = EnvIO(env_directory=USER_ENVS_DIR / name)
-        self.dependencies = {}
-        if self.history:
-            self.dependencies = get_dependencies(name=self.name)
-            if self.history.packages.get("r"):
-                self.dependencies["r"] = get_r_dependencies(name=self.name)
+        if dependencies:
+            self.dependencies = dependencies
+        else:
+            self.dependencies = {}
+            if self.history:
+                self.dependencies = get_dependencies(name=self.name)
+                if self.history.packages.get("r"):
+                    self.dependencies["r"] = get_r_dependencies(name=self.name)
+        if history:
+            self.history.packages.update_versions(dependencies=self.dependencies)
 
     @classmethod
     def create(
@@ -71,7 +81,16 @@ class Environment:
             )
 
         if name in get_all_existing_environment():
-            raise CondaEnvTrackerCondaError(f"Environment {name} already exist")
+            message = (
+                f"This environment {name} already exists. Would you like to replace it"
+            )
+            if prompt_yes_no(prompt_msg=message, default=False):
+                delete_conda_environment(name=name)
+                local_io = EnvIO(env_directory=USER_ENVS_DIR / name)
+                if local_io.env_dir.exists():
+                    local_io.delete_all()
+            else:
+                raise CondaEnvTrackerCondaError(f"Environment {name} already exists")
         logger.debug(f"creating conda env {name}")
 
         conda_create(
@@ -94,20 +113,23 @@ class Environment:
         if not channels:
             channels = get_conda_channels()
 
-        history = History(
+        dependencies = get_dependencies(name=name)
+
+        history = History.create(
             name=name,
             channels=Channels(channels),
-            packages=HistoryPackages.create(packages),
-            logs=Logs.create(create_cmd),
+            packages=PackageRevision.create(packages, dependencies=dependencies),
+            logs=Logs(create_cmd),
             actions=Actions.create(
                 name=name,
                 specs=specs,
                 channels=Channels(channels),
                 strict_channel_priority=strict_channel_priority,
             ),
+            diff=Diff.create(packages=packages, dependencies=dependencies),
             debug=Debug.create(name=name),
         )
-        env = cls(name=name, history=history)
+        env = cls(name=name, history=history, dependencies=dependencies)
         env.export()
 
         return env
@@ -132,23 +154,16 @@ class Environment:
                 f"Environment {name} can not be inferred, does not exist"
             )
 
-        existing_packages = get_dependencies(name=name)
-        if "r-base" in existing_packages["conda"]:
-            existing_r_packages = get_r_dependencies(name=name)
-        else:
-            existing_r_packages = {}
+        dependencies = get_dependencies(name=name)
+        if "r-base" in dependencies["conda"]:
+            dependencies["r"] = get_r_dependencies(name=name)
 
-        user_packages = {"conda": Packages(), "pip": Packages(), "r": Packages()}
+        user_packages = {"conda": Packages(), "pip": Packages()}
         for package in packages:
-            if package.name in existing_packages.get("conda", Packages()):
+            if package.name in dependencies.get("conda", Packages()):
                 user_packages["conda"].append(package)
-            elif package.name in existing_packages.get("pip", Packages()):
+            elif package.name in dependencies.get("pip", Packages()):
                 user_packages["pip"].append(package)
-            elif package.name in existing_r_packages:
-                raise RError(
-                    "Cannot infer R packages, must run follow-up R install command.\n"
-                    f"Found '{package.name}' in installed R packages {existing_r_packages}."
-                )
             else:
                 raise CondaEnvTrackerCondaError(
                     f"Environment {name} does not have {package.spec} installed"
@@ -159,18 +174,24 @@ class Environment:
         )
 
         specs = Actions.get_package_specs(
-            packages=user_packages["conda"], dependencies=existing_packages["conda"]
+            packages=user_packages["conda"], dependencies=dependencies["conda"]
         )
-        history = History(
+
+        history = History.create(
             name=name,
             channels=Channels(channels),
-            packages=HistoryPackages.create(user_packages["conda"]),
-            logs=Logs.create(conda_create_cmd),
+            packages=PackageRevision.create(
+                user_packages["conda"], dependencies=dependencies
+            ),
+            logs=Logs(conda_create_cmd),
             actions=Actions.create(name=name, specs=specs, channels=Channels(channels)),
+            diff=Diff.create(
+                packages=user_packages["conda"], dependencies=dependencies
+            ),
             debug=Debug.create(name=name),
         )
 
-        env = cls(name=name, history=history)
+        env = cls(name=name, history=history, dependencies=dependencies)
         if user_packages["pip"]:
             handler = PipHandler(env=env)
             handler.update_history_install(packages=user_packages["pip"])
@@ -194,19 +215,23 @@ class Environment:
 
     def remove(self, yes=False) -> None:
         """Remove the environment and history."""
-        delete_conda_environment(name=self.name)
-        try:
-            remote_io = EnvIO(self.local_io.get_remote_dir())
-        except CondaEnvTrackerRemoteError:
-            remote_io = None
-        self.local_io.delete_all()
-        if remote_io and (
-            yes
-            or prompt_yes_no(
-                prompt_msg=f"Do you want to remove remote files in dir: {remote_io.env_dir}?"
-            )
+        if yes or prompt_yes_no(
+            f"Are you sure you want to remove the {self.name} environment",
+            default=False,
         ):
-            remote_io.delete_all()
+            delete_conda_environment(name=self.name)
+            try:
+                remote_io = EnvIO(self.local_io.get_remote_dir())
+            except CondaEnvTrackerRemoteError:
+                remote_io = None
+            self.local_io.delete_all()
+            if remote_io and (
+                yes
+                or prompt_yes_no(
+                    prompt_msg=f"Do you want to remove remote files in dir: {remote_io.env_dir}?"
+                )
+            ):
+                remote_io.delete_all()
 
     def replace_history(self, history: History) -> None:
         """Replace with a new history."""
@@ -224,7 +249,7 @@ class Environment:
             packages += [
                 package for package in self.history.packages.get(source, {}).values()
             ]
-        self.validate_installed_packages(packages)
+        self.validate_packages(packages)
 
     def append_channels(self, channels: ListLike) -> None:
         """Append channels to the list of channels in the history."""
@@ -239,25 +264,26 @@ class Environment:
         if update_r_dependencies:
             self.dependencies["r"] = get_r_dependencies(name=self.name)
 
-    def validate_installed_packages(self, installed_packages: Packages):
+    def validate_packages(
+        self, installed_packages: Packages = None, source: str = "conda"
+    ):
         """Raise an error if a package was not installed correctly. If this command removes a package that
         was previously specified by the user, then warn that it has been removed and remove it from the history.
         """
-        installed_names = {package.name for package in installed_packages}
-        for source in self.sources:
-            removed = []
-            for package in self.history.packages.get(source, {}):
-                if package not in self.dependencies.get(source, {}):
-                    removed.append(package)
-            for package in removed:
-                if package in installed_names:
-                    raise CondaEnvTrackerInstallError(
-                        f'Package "{package}" was not installed.'
-                    )
-                logger.warning(
-                    f'Package "{package}" was removed during the last command.'
+        removed = []
+        for package in self.history.packages.get(source, {}):
+            if package not in self.dependencies.get(source, {}):
+                removed.append(package)
+        installed_names = set()
+        if installed_packages:
+            installed_names = {package.name for package in installed_packages}
+        for package in removed:
+            if package in installed_names:
+                raise CondaEnvTrackerInstallError(
+                    f'Package "{package}" was not installed.'
                 )
-                self.history.packages[source].pop(package)
+            logger.warning(f'Package "{package}" was removed during the last command.')
+            self.history.packages[source].pop(package)
 
     def _export_packages(self) -> None:
         """Export a conda env yaml file with only the packages with versions for switching platforms.
@@ -295,7 +321,11 @@ class Environment:
     def _export_install_r_if_necessary(self) -> None:
         """Export an install.R file that can be used to install the same R packages and versions."""
         if self.history.packages.get("r"):
-            install_r = export_install_r(r_packages=self.history.packages["r"])
+            install_r = export_install_r(
+                packages=Packages(
+                    [package for package in self.history.packages["r"].values()]
+                )
+            )
             self.local_io.export_install_r(install_r)
         else:
             self.local_io.delete_install_r()

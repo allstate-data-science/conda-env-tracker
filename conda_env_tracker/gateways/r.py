@@ -1,8 +1,8 @@
-"""The conda_env_tracker interface to installing R packages."""
+"""The conda env tracker interface to installing R packages."""
+import logging
 from pathlib import Path
 import re
 import subprocess
-from typing import Dict
 
 from conda_env_tracker.gateways.conda import (
     is_current_conda_env,
@@ -18,16 +18,20 @@ LIST_R_PACKAGES = ";".join(
         "installed_raw <- installed.packages()",
         "installed_df <- as.data.frame(installed_raw, stringsAsFactors=FALSE)",
         'installed <- installed_df[, c("Package", "Version", "Priority")]',
-        'user_installed <- installed[is.na(installed[["Priority"]]), c("Package", "Version"), drop=FALSE]',
+        r'user_installed <- installed[is.na(installed[["Priority"]]), c("Package", "Version"), drop=FALSE]',
         "print(user_installed, row.names=FALSE)",
     )
 )
 R_COMMAND = "R --quiet --vanilla"
 
 
+logger = logging.getLogger(__name__)
+
+
 def get_r_dependencies(name: str) -> dict:
     """Get the R packages and their versions."""
     command = get_shell_command(name=name, r_command=LIST_R_PACKAGES)
+    logger.debug(f"Get R dependencies command:\n{command}")
     process = subprocess.run(
         command,
         stdout=subprocess.PIPE,
@@ -41,11 +45,8 @@ def get_r_dependencies(name: str) -> dict:
 
 
 def r_install(name: str, packages: Packages) -> str:
-    """Install r packages.
-
-    shell_command.split will try to split conda activate command from shell command
-    """
-    r_command = get_r_install_command(packages=packages)
+    """Install R packages."""
+    r_command = _combine_r_specs(packages=packages)
     shell_command = _run_r_install(name=name, packages=packages, r_command=r_command)
     r_shell_command = shell_command.split("&&")[-1].strip()
     return r_shell_command
@@ -71,21 +72,10 @@ def r_remove(name: str, package: Packages):
     return r_shell_command
 
 
-def get_shell_command(
-    name: str, r_command: str, include_conda_activate: bool = True
-) -> str:
-    """Handle conda env and call R code from command line."""
-    commands = []
-    if not is_current_conda_env(name=name) and include_conda_activate:
-        commands.append(get_conda_activate_command(name=name))
-    r_command = _wrap_r_subprocess_command(r_command)
-    commands.append(r_command)
-    return " && ".join(commands)
-
-
 def _run_r_install(name: str, packages: Packages, r_command: str) -> str:
     """Run r install command"""
     command = get_shell_command(name=name, r_command=r_command)
+    logger.debug(f"R install command:\n{command}")
     process = run_command(command, error=RError)
     if process.failed or _cannot_install_r_package(process.stderr, packages):
         raise RError(
@@ -94,15 +84,15 @@ def _run_r_install(name: str, packages: Packages, r_command: str) -> str:
     return command
 
 
-def _run_r_remove(name: str, r_command: str) -> str:
-    """Run r remove command"""
-    command = get_shell_command(name=name, r_command=r_command)
-    process = run_command(command, error=RError)
-    if process.failed:
-        raise RError(
-            f"Error removing R packages:\n{process.stderr}\nenvironment='{name}' and command='{r_command}'."
-        )
-    return command
+def get_r_shell_install_command(packages: Packages) -> str:
+    """Get the shell R install command"""
+    shell_command = _combine_r_specs(packages=packages)
+    return _wrap_r_subprocess_command(shell_command)
+
+
+def _combine_r_specs(packages: Packages) -> str:
+    """Combine the R package install commands into a single R command."""
+    return "; ".join(package.spec for package in packages)
 
 
 def get_r_shell_remove_command(packages: Packages) -> str:
@@ -111,18 +101,12 @@ def get_r_shell_remove_command(packages: Packages) -> str:
     return _wrap_r_subprocess_command(shell_command)
 
 
-def _get_r_remove_command(packages: Packages) -> str:
-    """Get r remove command"""
-    package_name = []
-    for package in packages:
-        package_name.append(f'"{package.name}"')
-    return f"remove.packages(c({','.join(package_name)}))"
-
-
-def export_install_r(r_packages: Dict[str, Package]) -> str:
+def export_install_r(packages: Packages) -> str:
     """Create the install.R with R commands that will install all of the packages."""
-    r_commands = [package.spec for package in r_packages.values()]
-    return "\n".join(r_commands)
+    install_r = []
+    for package in packages:
+        install_r.append(package.spec)
+    return "\n".join(install_r)
 
 
 def update_r_environment(name: str, env_dir: PathLike) -> None:
@@ -131,6 +115,7 @@ def update_r_environment(name: str, env_dir: PathLike) -> None:
     if install_r.exists():
         r_update_command = f'source("{install_r.absolute()}")'
         command = get_shell_command(name=name, r_command=r_update_command)
+        logger.debug(f"Update R environment command:\n{command}")
         process = run_command(command, error=RError)
         if process.failed:
             raise RError(f"Error updating R packages in environment:\n{process.stderr}")
@@ -162,6 +147,16 @@ def _cannot_install_r_package(stderr: str, packages: Packages) -> bool:
     return False
 
 
+def get_shell_command(name: str, r_command: str) -> str:
+    """Handle conda env and call R code from command line."""
+    commands = []
+    if not is_current_conda_env(name=name):
+        commands.append(get_conda_activate_command(name=name))
+    r_command = _wrap_r_subprocess_command(r_command)
+    commands.append(r_command)
+    return " && ".join(commands)
+
+
 def _wrap_r_subprocess_command(command: str) -> str:
     """Allow R code to be run from command line."""
     escaped_command = _escape_command(command)
@@ -170,7 +165,27 @@ def _wrap_r_subprocess_command(command: str) -> str:
 
 def _escape_command(string: str) -> str:
     """Any unescaped single quotes must be escaped. Any escaped single quotes must be left alone."""
-    if "'" not in string:
-        return f"'{string}'"
-    escaped_string = re.sub(r"(?<!\\)'", r"\'", string)
-    return f"$'{escaped_string}'"
+    if '"' not in string:
+        return f'"{string}"'
+    escaped_string = re.sub(r'(?<!\\)"', r"\"", string)
+    return f'"{escaped_string}"'
+
+
+def _get_r_remove_command(packages: Packages) -> str:
+    """Get r remove command"""
+    package_names = []
+    for package in packages:
+        package_names.append(f'"{package.name}"')
+    return f"remove.packages(c({','.join(package_names)}))"
+
+
+def _run_r_remove(name: str, r_command: str) -> str:
+    """Run r remove command"""
+    command = get_shell_command(name=name, r_command=r_command)
+    logger.debug(f"R remove command:\n{command}")
+    process = run_command(command, error=RError)
+    if process.failed:
+        raise RError(
+            f"Error removing R packages:\n{process.stderr}\nenvironment='{name}' and command='{r_command}'."
+        )
+    return command

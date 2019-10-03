@@ -2,7 +2,7 @@
 import re
 
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 from conda_env_tracker.types import ListLike
 
@@ -10,11 +10,12 @@ from conda_env_tracker.types import ListLike
 class Package:
     """The metadata about each package."""
 
-    def __init__(self, name, spec=None, version=None, build=None):
+    def __init__(self, name, spec=None, version=None, build=None, date=None):
         self.name = name
         self.spec = spec
         self.version = version
         self.build = build
+        self.date = date
 
     @classmethod
     def from_spec(cls, spec):
@@ -34,19 +35,6 @@ class Package:
         """Check if the spec is just the package name."""
         return self.spec == self.name
 
-    def get_version_from_spec(self, ignore_build=False) -> Optional[str]:
-        """If there is a version in the spec, then get the version.
-
-        If there is a build string in the spec, then ignore_build=True will return only the version.
-        """
-        separated = self.separate_spec(self.spec)
-        if len(separated) == 2:
-            version = separated[1]
-            if ignore_build:
-                return self.separate_spec(version)[0]
-            return version
-        return None
-
     def create_spec(self, separator="=", ignore_build=False) -> str:
         """Create the spec from the version and (optionally) build."""
         if not ignore_build and self.build:
@@ -54,7 +42,7 @@ class Package:
         return self.name + separator + self.version
 
     def spec_is_custom(self) -> bool:
-        """Custom urls was used to install."""
+        """Custom url or command was used to install."""
         return not self.spec.startswith(self.name)
 
     def __eq__(self, other):

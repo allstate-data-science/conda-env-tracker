@@ -4,15 +4,19 @@ import logging
 from typing import Optional
 
 from conda_env_tracker.conda import CondaHandler
-from conda_env_tracker.gateways.conda import update_conda_environment
 from conda_env_tracker.env import Environment
-from conda_env_tracker.errors import CondaEnvTrackerCreationError
-from conda_env_tracker.history import History
+from conda_env_tracker.errors import (
+    CondaEnvTrackerCreationError,
+    CondaEnvTrackerRemoteError,
+    CondaEnvTrackerPullError,
+)
+from conda_env_tracker.gateways.conda import update_conda_environment
 from conda_env_tracker.gateways.io import EnvIO
+from conda_env_tracker.gateways.r import update_r_environment, R_COMMAND
+from conda_env_tracker.history import History
 from conda_env_tracker.packages import Packages
 from conda_env_tracker.pip import PipHandler
 from conda_env_tracker.r import RHandler
-from conda_env_tracker.gateways.r import update_r_environment, R_COMMAND
 from conda_env_tracker.types import PathLike
 from conda_env_tracker.utils import prompt_yes_no, is_ordered_subset
 
@@ -21,41 +25,35 @@ logger = logging.getLogger(__name__)
 
 def pull(env: Environment, yes: bool = False) -> Environment:
     """Pull history from remote to local"""
-    remote_dir = env.local_io.get_remote_dir()
+    try:
+        remote_dir = env.local_io.get_remote_dir()
+    except CondaEnvTrackerRemoteError as remote_err:
+        raise CondaEnvTrackerPullError(str(remote_err))
     remote_io = EnvIO(env_directory=remote_dir)
     remote_history = remote_io.get_history()
 
     local_history = env.history
 
-    _check_for_errors(local_history=local_history, remote_history=remote_history)
-
+    if _create_env_with_new_id(env=env, remote_history=remote_history, yes=yes):
+        return replace_local_with_remote(
+            env=env,
+            remote_dir=remote_dir,
+            remote_io=remote_io,
+            remote_history=remote_history,
+        )
     if _nothing_to_pull(local_history=local_history, remote_history=remote_history):
         logger.info("Nothing to pull.")
         return env
-    if _local_needs_update(local_history=local_history, remote_history=remote_history):
-        update(
-            env=env,
-            remote_dir=remote_dir,
-            remote_io=remote_io,
-            remote_history=remote_history,
-        )
-        return env
-    if _actions_in_different_order(
-        local_history=local_history, remote_history=remote_history
+    if _local_needs_update(
+        local_history=local_history, remote_history=remote_history, yes=yes
     ):
-        if not yes and not prompt_yes_no(
-            prompt_msg="Remote environment has same packages but in different order, "
-            "Should we overwrite local with remote environment"
-        ):
-            logger.info("Exiting without updating local environment.")
-            return env
-        update(
+        return replace_local_with_remote(
             env=env,
             remote_dir=remote_dir,
             remote_io=remote_io,
             remote_history=remote_history,
         )
-        return env
+
     if not yes and not prompt_yes_no(
         prompt_msg=(
             "Remote and local have different packages, do you want to overwrite "
@@ -63,7 +61,20 @@ def pull(env: Environment, yes: bool = False) -> Environment:
         )
     ):
         logger.info("Exiting without updating local environment.")
-        return env
+        raise CondaEnvTrackerPullError(
+            "Conflicting Packages in remote and local; user elected not to update"
+        )
+
+    return merge_conflicting_changes(env=env)
+
+
+def merge_conflicting_changes(env: Environment):
+    """Reconciles packages between local and remote"""
+    remote_dir = env.local_io.get_remote_dir()
+    remote_io = EnvIO(env_directory=remote_dir)
+    remote_history = remote_io.get_history()
+
+    local_history = env.history
     update_conda_environment(env_dir=remote_dir)
     if _r_env_needs_updating(
         local_history=local_history, remote_history=remote_history
@@ -78,9 +89,6 @@ def pull(env: Environment, yes: bool = False) -> Environment:
             extra_logs.append(log)
     for log in extra_logs:
         new_env = _update_from_extra_log(env=new_env, history=local_history, log=log)
-    new_env = _update_r_packages(
-        env=new_env, local_history=local_history, remote_history=remote_history
-    )
 
     new_env.validate()
     new_env.export()
@@ -90,7 +98,7 @@ def pull(env: Environment, yes: bool = False) -> Environment:
     return new_env
 
 
-def update(
+def replace_local_with_remote(
     env: Environment, remote_dir: PathLike, remote_io: EnvIO, remote_history: History
 ):
     """Update the environment and history."""
@@ -101,18 +109,7 @@ def update(
     env.replace_history(history=remote_history)
     env.validate()
     logger.info("Successfully updated the environment.")
-
-
-def _check_for_errors(local_history: History, remote_history: History) -> None:
-    """Check for any errors."""
-    if (
-        local_history
-        and remote_history
-        and local_history.logs[0] != remote_history.logs[0]
-    ):
-        raise CondaEnvTrackerCreationError(
-            "Local and remote cet environment have different creation commands."
-        )
+    return env
 
 
 def _nothing_to_pull(local_history: History, remote_history: History) -> bool:
@@ -126,13 +123,43 @@ def _nothing_to_pull(local_history: History, remote_history: History) -> bool:
     return False
 
 
-def _local_needs_update(local_history: History, remote_history: History) -> bool:
+def _create_env_with_new_id(env: Environment, remote_history: History, yes: bool):
+    if env.history and remote_history and env.history.id != remote_history.id:
+        if yes or prompt_yes_no(
+            prompt_msg=(
+                f"The remote cet environment ({env.local_io.get_remote_dir()}) doesn't match the local environment ({env.name})\n"
+                "Would you like to replace your local environment"
+            ),
+            default=False,
+        ):
+            return True
+        raise CondaEnvTrackerCreationError(
+            f"The remote environment ({env.local_io.get_remote_dir()}) appears to be new environment and would replace the current local environment ({env.name})\n"
+            "User elected not to update"
+        )
+    return False
+
+
+def _local_needs_update(
+    local_history: History, remote_history: History, yes: bool = True
+) -> bool:
     """Either the local does not yet exist or local is a subset of remote."""
     if not local_history and remote_history:
         return True
     if _no_new_actions_in_local(
         local_history=local_history, remote_history=remote_history
     ):
+        return True
+    if _actions_in_different_order(
+        local_history=local_history, remote_history=remote_history
+    ):
+        if not yes and not prompt_yes_no(
+            prompt_msg="Remote environment has same packages but in different order, "
+            "Should we overwrite local with remote environment"
+        ):
+            raise CondaEnvTrackerPullError(
+                "Actions in a different order; user elected not to update"
+            )
         return True
     return False
 
@@ -228,37 +255,15 @@ def _handle_r_extra_log(env: Environment, history: History, index: int) -> Envir
     if "remove.packages(" in log:
         packages = history.logs.extra_removed_packages(index=index)
         RHandler(env=env).remove(packages=packages)
-    return env
-
-
-def _update_r_packages(
-    env: Environment, local_history: History, remote_history: History
-) -> Environment:
-    """Check for differences in R packages and install/remove necessary packages."""
-    env = _install_missing_r_packages(
-        env=env, local_history=local_history, remote_history=remote_history
-    )
-    return env
-
-
-def _install_missing_r_packages(
-    env: Environment, local_history: History, remote_history: History
-) -> Environment:
-    local_r_packages = local_history.packages.get("r", {})
-    remote_r_packages = remote_history.packages.get("r", {})
-    handler = RHandler(env=env)
-    packages_to_install = Packages()
-    packages_to_add_to_history = Packages()
-    for package_name, package in local_r_packages.items():
-        if package_name not in remote_r_packages:
-            if package_name in env.dependencies.get("r", {}):
-                packages_to_add_to_history.append(package)
-            else:
-                packages_to_install.append(package)
-    if packages_to_install:
-        handler.install(packages_to_install)
-    if packages_to_add_to_history:
-        handler.update_history_install(packages_to_add_to_history)
+    else:
+        package_names = [
+            package_name
+            for package_name in history.revisions.diffs[index]["r"]["upsert"]
+        ]
+        packages = Packages()
+        for package_name in package_names:
+            packages.append(history.revisions.packages[index]["r"][package_name])
+        RHandler(env=env).install(packages=packages)
     return env
 
 

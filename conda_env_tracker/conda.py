@@ -38,7 +38,6 @@ class CondaHandler:
             ),
             yes=yes,
         )
-        self.env.update_dependencies()
         self.update_history_install(
             packages=packages,
             channels=channels,
@@ -57,7 +56,6 @@ class CondaHandler:
             channel_command=channel_command,
             yes=yes,
         )
-        self.env.update_dependencies()
         self.update_history_remove(packages=packages, channels=channels)
         self.env.export()
 
@@ -78,7 +76,6 @@ class CondaHandler:
             ),
             yes=yes,
         )
-        self.env.update_dependencies()
         self.update_history_update_all(
             packages=packages,
             channels=channels,
@@ -106,13 +103,20 @@ class CondaHandler:
         channels: ListLike = None,
         strict_channel_priority: bool = True,
     ):
-        """Update the history file for conda update --all."""
+        """Update the history file for conda update --all.
+
+        The conda packages in the history file cannot have a custom spec after update --all.
+        """
         self._update_history(
             get_command=get_conda_update_all_command,
             packages=packages,
             channels=channels,
             strict_channel_priority=strict_channel_priority,
         )
+        package_names = {pkg.name for pkg in packages}
+        for package in self.env.history.packages["conda"].values():
+            if package.name != "python" and package.name not in package_names:
+                package.spec = package.name
 
     def _update_history(
         self,
@@ -122,21 +126,18 @@ class CondaHandler:
         strict_channel_priority: bool = True,
     ):
         self.env.update_dependencies()
-        self.env.history.packages.update_packages(packages)
-
-        self.env.validate_installed_packages(packages)
-
-        modified_packages = self.env.history.get_packages_with_implicit_version_change(
-            dependencies=self.env.dependencies, source="conda"
+        self.env.history.update_packages(
+            packages=packages, dependencies=self.env.dependencies
         )
+
+        self.env.validate_packages(packages)
 
         log = get_command(name=self.env.name, packages=packages)
         if channels:
             log = log + " " + Channels.format_channels(channels)
 
         specs = self.env.history.actions.get_package_specs(
-            packages=list(packages) + modified_packages,
-            dependencies=self.env.dependencies["conda"],
+            packages=packages, dependencies=self.env.dependencies["conda"]
         )
 
         channel_string = self.env.history.channels.create_channel_command(
@@ -153,8 +154,11 @@ class CondaHandler:
         self, packages: Packages, channels: ListLike = None
     ) -> None:
         """Update history for conda remove."""
-        self.env.history.packages.remove_packages(packages)
-        self.env.validate_installed_packages(packages)
+        self.env.update_dependencies()
+        self.env.history.remove_packages(
+            packages=packages, dependencies=self.env.dependencies
+        )
+        self.env.validate_packages()
 
         remove_command = get_conda_remove_command(name=self.env.name, packages=packages)
         if channels:

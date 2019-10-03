@@ -59,6 +59,14 @@ def test_prompt_yes_no(mocker, return_values):
     assert len(patch.call_args_list) == len(return_values)
 
 
+def test_prompt_yes_no_default(mocker):
+    patch = mocker.patch("conda_env_tracker.utils.input", return_value="y")
+    prompt_yes_no(prompt_msg="", default=True)
+    patch.assert_called_with(" ([y]/n)? ")
+    prompt_yes_no(prompt_msg="", default=False)
+    patch.assert_called_with(" (y/[n])? ")
+
+
 def test_exit_with_user_no(mocker):
     run_mock = mocker.patch("conda_env_tracker.gateways.utils.run")
     attrs = {

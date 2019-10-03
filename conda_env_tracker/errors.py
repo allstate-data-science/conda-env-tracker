@@ -1,22 +1,22 @@
-"""All cet errors."""
+"""All habitat errors."""
 
 PUSH_ERROR_STR = """To {remote_dir}
  ! [rejected]        {local_dir} -> {remote_dir}
 hint: Updates were rejected because the remote contains work that you do
 hint: not have locally. You may want to first integrate the remote changes
-hint: (e.g., 'cet pull ...') before pushing again."""
+hint: (e.g., 'habitat pull ...') before pushing again."""
 
 
 class Error(Exception):
-    """The base exception for cet."""
+    """The base exception for habitat."""
 
 
 class CondaEnvTrackerError(Error):
-    """Conda-env-tracker related exception"""
+    """CondaEnvTracker related exception"""
 
 
 class CondaEnvTrackerPackageNameError(CondaEnvTrackerError):
-    """Conda-env-tracker package name error."""
+    """CondaEnvTracker package name error."""
 
 
 class CondaEnvTrackerInstallError(CondaEnvTrackerError):
@@ -24,31 +24,39 @@ class CondaEnvTrackerInstallError(CondaEnvTrackerError):
 
 
 class CondaEnvTrackerCondaError(CondaEnvTrackerError):
-    """Conda-env-tracker conda related exception"""
+    """CondaEnvTracker conda related exception"""
 
 
 class CondaEnvTrackerChannelError(CondaEnvTrackerError):
-    """Conda-env-tracker channel exception"""
+    """CondaEnvTracker channel exception"""
 
 
 class CondaEnvTrackerPushError(CondaEnvTrackerError):
-    """Conda-env-tracker push exception"""
+    """CondaEnvTracker push exception"""
+
+
+class CondaEnvTrackerPullError(CondaEnvTrackerError):
+    """CondaEnvTracker pull exception"""
 
 
 class CondaEnvTrackerParseHistoryError(CondaEnvTrackerError):
-    """Conda-env-tracker parse history exception"""
+    """CondaEnvTracker parse history exception"""
 
 
 class CondaEnvTrackerRemoteError(CondaEnvTrackerError):
-    """Conda-env-tracker setup exception"""
+    """CondaEnvTracker setup exception"""
 
 
 class CondaEnvTrackerCreationError(CondaEnvTrackerError):
-    """Conda-env-tracker environments were created with different commands"""
+    """CondaEnvTracker environments were created with different commands"""
 
 
 class CondaEnvTrackerHistoryNotFoundError(CondaEnvTrackerError):
-    """Conda-env-tracker history file not found"""
+    """CondaEnvTracker history file not found"""
+
+
+class CondaEnvTrackerUpgradeError(CondaEnvTrackerError):
+    """Error while upgrading habitat history file"""
 
 
 class NotGitRepoError(CondaEnvTrackerError):

@@ -58,7 +58,7 @@ def end_to_end_setup(request):
 @pytest.fixture(scope="module")
 def r_end_to_end_setup(request):
     """Setup and teardown for R end to end tests."""
-    name = "end_to_end_test"
+    name = "r_end_to_end_test"
     channels = ["r", "defaults"]
     env_dir = USER_ENVS_DIR / name
 
